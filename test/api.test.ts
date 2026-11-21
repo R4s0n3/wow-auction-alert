@@ -4,7 +4,8 @@ import { loadConfig } from "../src/config.ts";
 import { openDatabase } from "../src/db/database.ts";
 import { Repo } from "../src/db/repo.ts";
 import { runEngine } from "../src/engine/run.ts";
-import { discordMessages, dots, itemLines, sendDiscord, shortGold } from "../src/live/discord.ts";
+import { discordMessages, dots, itemLines, sendDiscord, shortGold, weeklyMessages } from "../src/live/discord.ts";
+import { digestDue, sendWeeklyDigest } from "../src/digest.ts";
 import type { Alert } from "../src/db/repo.ts";
 import type { Prediction } from "../src/engine/predict.ts";
 import { LiveHub } from "../src/live/hub.ts";
@@ -150,6 +151,76 @@ describe("Engine + Live", () => {
     while (!received.includes("Pestblüte")) received += decoder.decode((await reader.read()).value);
     expect(received).toContain("event: alert");
     await reader.cancel();
+  });
+});
+
+describe("Gewinner und Verlierer der Woche", () => {
+  test("Startseite: zwei Top-10-Listen oben, alle Signale hinter einem Knopf, ohne Vorwoche keine echte Bewegung", async () => {
+    ctx = makeContext();
+    await postScan(scan(3000));
+    const html = await (await fetch(url("/"))).text();
+    const winners = html.split("📈 Gewinner der Woche")[1]!.split("</section>")[0]!;
+    expect(winners).toContain("jetzt kaufen");
+    expect(winners).toContain('<span class="pos">1</span>');
+    expect(winners).toContain('<span class="name">Pestblüte</span>');
+    expect(winners.match(/<li class="rank">/g)!.length).toBeLessThanOrEqual(10);
+    expect(html.split("📉 Verlierer der Woche")[1]!.split("</section>")[0]).toContain("Gerade nichts.");
+    expect(html).toContain('<div class="all" hidden>');
+    expect(html.indexOf("Gewinner der Woche")).toBeLessThan(html.indexOf('<div class="all" hidden>'));
+    expect(html).not.toContain("Echte Bewegung");
+  });
+
+  test("Startseite: mit Scans aus der Vorwoche erscheint, was wirklich gestiegen ist", async () => {
+    ctx = makeContext();
+    await postScan(scan(3000, Math.floor((NOW - 8 * DAY) / 1000)));
+    await postScan(scan(6000));
+    const html = await (await fetch(url("/"))).text();
+    const moved = html.split("Echte Bewegung seit letzter Woche")[1]!;
+    expect(moved.split("🔻 Gefallen")[0]).toContain('<span class="name">Pestblüte</span>');
+    expect(moved.split("🔻 Gefallen")[0]).toContain('<span class="chg">+100 %</span>');
+    expect(moved.split("🔻 Gefallen")[1]).toContain("Nichts Auffälliges.");
+  });
+
+  test("Discord-Rückblick: nummerierte Karten, Gewinner und Verlierer getrennt", () => {
+    const p = (i: number, action: "buy" | "sell"): Prediction => ({
+      source: "ai", realm: "eu", itemId: i, itemName: `Item ${i}`, eventId: "ai", eventName: "x", eventDate: null, action,
+      impact: action === "buy" ? 0.5 : -0.4, confidence: 0.6, netUpside: action === "buy" ? 0.4 : -0.45, currentPrice: 10_000 * i,
+      baselinePrice: null, expectedPeakPrice: 12_000 * i, priceBasis: "current", buyUntil: "2026-12-05", sellFrom: null, sellTo: "2026-12-01", drivers: [],
+    });
+    const top = { winners: [1, 2, 3].map((i) => p(i, "buy")), losers: [4, 5].map((i) => p(i, "sell")) };
+    const [win, lose] = weeklyMessages("eu-alliance", top, { publicUrl: "https://wahp.example.com" }, NOW);
+    expect(win!.embeds.map((e) => e.title)).toEqual(["1. Item 1", "2. Item 2", "3. Item 3"]);
+    expect(win!.embeds[0]!.author!.name).toBe("📈 GEWINNER DER WOCHE · jetzt kaufen");
+    expect(lose!.embeds[0]!.author!.name).toBe("📉 VERLIERER DER WOCHE · jetzt verkaufen");
+    expect(lose!.embeds[0]!.color).toBe(0xe74c3c);
+    expect(lose!.embeds.at(-1)!.footer!.text).toBe("eu-alliance · alle Signale auf wahp.example.com");
+    expect(weeklyMessages("eu", { winners: top.winners, losers: [] })).toHaveLength(1);
+  });
+
+  test("Rückblick nur montags ab 9 Uhr Berlin, höchstens einmal pro Woche, und wird verschickt", async () => {
+    const monday9 = Date.parse("2026-11-23T08:00:00Z"); // 09:00 MEZ
+    expect(digestDue(monday9, null)).toBe(true);
+    expect(digestDue(monday9 - 60_000, null)).toBe(false); // 08:59
+    expect(digestDue(Date.parse("2026-11-22T12:00:00Z"), null)).toBe(false); // Sonntag
+    expect(digestDue(monday9 + 3_600_000, monday9)).toBe(false); // schon verschickt
+    expect(digestDue(monday9 + 7 * DAY, monday9 + 15 * 60_000)).toBe(true); // nächste Woche
+    expect(digestDue(Date.parse("2026-06-01T07:00:00Z"), null)).toBe(true); // Sommerzeit: 09:00 MESZ
+
+    ctx = makeContext();
+    await postScan(scan(3000));
+    const posted: any[] = [];
+    const fakeFetch = (async (target: string, init?: RequestInit) => {
+      if (String(target).includes("wowhead")) return new Response(null, { status: 404 });
+      posted.push(JSON.parse(init!.body as string));
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+    const config = { ...ctx.config, discordWebhookUrl: "https://discord.test/hook", publicUrl: "https://wahp.example.com" };
+    const n = await sendWeeklyDigest({ repo: ctx.repo, knowledge: ctx.knowledge, config, fetchImpl: fakeFetch, sleep: async () => {} }, NOW);
+    expect(n).toBeGreaterThan(0);
+    expect(posted).toHaveLength(1); // vor dem Raid nur Gewinner
+    expect(posted[0].embeds[0].author.name).toBe("📈 GEWINNER DER WOCHE · jetzt kaufen");
+    expect(posted[0].embeds.length).toBeLessThanOrEqual(10);
+    expect(ctx.repo.getMeta("weekly_digest_sent_at")).toBe(String(NOW));
   });
 });
 

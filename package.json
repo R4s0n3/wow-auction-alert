@@ -6,6 +6,7 @@
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "analyze": "bun src/ai/main.ts",
+    "digest": "bun src/digest-cli.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "companion": "bun src/companion/main.ts",

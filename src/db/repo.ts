@@ -312,6 +312,15 @@ export class Repo {
     })();
   }
 
+  getMeta(key: string): string | null {
+    const row = this.db.query(`SELECT value FROM meta WHERE key = $key`).get({ key }) as { value: string } | null;
+    return row?.value ?? null;
+  }
+
+  setMeta(key: string, value: string): void {
+    this.db.query(`INSERT INTO meta (key, value) VALUES ($key, $value) ON CONFLICT (key) DO UPDATE SET value = excluded.value`).run({ key, value });
+  }
+
   transaction<T>(fn: () => T): T {
     return this.db.transaction(fn)();
   }

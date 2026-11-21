@@ -1,6 +1,7 @@
 import { forever } from "../knowledge/forever/index.ts";
 import { runAnalysis } from "./ai/analyze.ts";
 import { createClient } from "./ai/provider.ts";
+import { maybeSendWeeklyDigest } from "./digest.ts";
 import { iconsFor, resolveIcons } from "./icons.ts";
 import { startServer } from "./api/server.ts";
 import { loadConfig } from "./config.ts";
@@ -45,6 +46,10 @@ async function tick(): Promise<void> {
     }
     console.log(`[engine] ${predictions} Prognosen, ${alerts.length} neue Alerts`);
     void warmIcons(signalItemIds);
+    if (config.discordWebhookUrl) {
+      const sent = await maybeSendWeeklyDigest({ repo, knowledge, config });
+      if (sent) console.log("[discord] Wochenrückblick verschickt");
+    }
   } catch (err) {
     console.error("[engine] Durchlauf fehlgeschlagen:", err);
   }

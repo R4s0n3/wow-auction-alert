@@ -73,6 +73,12 @@ CREATE TABLE IF NOT EXISTS ai_briefs (
   sources    TEXT    NOT NULL -- JSON: [{ url, title }]
 );
 
+-- Kleine Merkzettel, z. B. wann der Wochenrückblick zuletzt in Discord war
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 -- Letzte KI-Bewertung pro Item und Realm
 CREATE TABLE IF NOT EXISTS ai_assessments (
   realm      TEXT    NOT NULL,

@@ -6,19 +6,15 @@ import type { Knowledge } from "../knowledge/types.ts";
 import { AiError, assessChunk, compileBrief, MAX_SEARCHES, priceFor, research, UsageTally } from "./claude.ts";
 import { assessSystem, itemsPrompt, RESEARCH_SYSTEM, researchPrompt, SOURCES_SYSTEM, sourcesPrompt } from "./prompts.ts";
 import { apiModel } from "./provider.ts";
+import { movers, type Mover } from "../engine/weekly.ts";
 import { fetchSources, type SourceDoc } from "./sources.ts";
 import type { Brief, MarketItem, Source, StoredAssessment } from "./types.ts";
 
 /** Größte Preisbewegungen seit der Vorwoche aus den eigenen Scans, als Zeilen für den Bericht */
 export function marketMovers(market: MarketItem[], top = 15): string[] {
-  const moved = market
-    .filter((i) => i.priceWeekBefore !== null && i.priceWeekBefore > 0 && i.quantity >= 5 && i.price * i.quantity >= 100_000)
-    .map((i) => ({ i, change: i.price / i.priceWeekBefore! - 1 }))
-    .filter((m) => Math.abs(m.change) >= 0.2);
-  const line = (m: { i: MarketItem; change: number }) =>
-    `- ${m.i.name ?? `Item ${m.i.itemId}`}: ${m.change >= 0 ? "+" : ""}${Math.round(m.change * 100)} % (${Math.round(m.i.priceWeekBefore! / 100)}s → ${Math.round(m.i.price / 100)}s, ${m.i.quantity} im AH)`;
-  const up = moved.filter((m) => m.change > 0).sort((a, b) => b.change - a.change).slice(0, top);
-  const down = moved.filter((m) => m.change < 0).sort((a, b) => a.change - b.change).slice(0, top);
+  const { up, down } = movers(market, top);
+  const line = (m: Mover) =>
+    `- ${m.name}: ${m.change >= 0 ? "+" : ""}${Math.round(m.change * 100)} % (${Math.round(m.before / 100)}s → ${Math.round(m.price / 100)}s, ${m.quantity} im AH)`;
   return [...up.map(line), ...down.map(line)];
 }
 

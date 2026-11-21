@@ -1,6 +1,7 @@
 import type { Action, Prediction } from "../engine/predict.ts";
 import { byWorth } from "../engine/rank.ts";
 import { predictionsFor } from "../engine/run.ts";
+import { movers, weeklyTop, type Mover } from "../engine/weekly.ts";
 import { iconUrl, resolveIcons, wowheadUrl } from "../icons.ts";
 import { dots } from "../live/discord.ts";
 import type { AppContext } from "./server.ts";
@@ -52,6 +53,56 @@ function card(p: Prediction, meta: Meta): string {
   <div class="meta">${deadline}<span class="dots" title="Sicherheit ${Math.round(p.confidence * 100)} %">${dots(p.confidence)}</span>${p.source === "ai" ? `<span class="ai" title="KI-Prognose">🤖</span>` : ""}</div>
   <p class="why"><b>${esc(p.eventName)}</b> ${esc(why)}</p>
 </article>`;
+}
+
+function iconTag(itemId: number, name: string, meta: Meta, size = 40): string {
+  const m = meta.get(itemId);
+  return m?.icon
+    ? `<img class="icon" src="${iconUrl(m.icon, "large")}" alt="" loading="lazy" width="${size}" height="${size}">`
+    : `<span class="icon none">${esc(name.slice(0, 1))}</span>`;
+}
+
+/** Eine Rangliste: Platz, Icon, Name, Badge, darunter Preis, Frist, Sicherheit. Klick zeigt die Begründung. */
+function topList(title: string, hint: string, action: Action, list: Prediction[], meta: Meta): string {
+  const rows = list.map((p, i) => {
+    const badge = p.action === "buy" ? pct(p.netUpside) : p.impact < 0 ? pct(p.impact) : "Peak";
+    const price =
+      p.currentPrice === null
+        ? ""
+        : p.expectedPeakPrice !== null && !(p.action === "sell" && p.impact >= 0)
+          ? `${coins(p.currentPrice)} <span class="arrow">→</span> ${coins(p.expectedPeakPrice)}`
+          : coins(p.currentPrice);
+    const until = p.action === "buy" ? p.buyUntil : p.sellTo;
+    const deadline = until ? `⏳ ${shortDate(until)}` : p.action === "sell" ? "⏳ jetzt" : "";
+    const why = p.drivers[0] ? (p.source === "ai" ? p.drivers[0].reason : `${p.drivers[0].chain}. ${p.drivers[0].reason}`) : p.eventName;
+    return `<li class="rank">
+      <span class="pos">${i + 1}</span>
+      <a class="item q${meta.get(p.itemId)?.quality ?? 1}" href="${wowheadUrl(p.itemId)}" target="_blank" rel="noopener">${iconTag(p.itemId, p.itemName, meta)}<span class="name">${esc(p.itemName)}</span></a>
+      <span class="badge">${badge}</span>
+      <div class="sub"><span class="price">${price}</span>${deadline ? `<span>${deadline}</span>` : ""}<span class="dots" title="Sicherheit ${Math.round(p.confidence * 100)} %">${dots(p.confidence)}</span></div>
+      <p class="why"><b>${esc(p.eventName)}</b> ${esc(why)}</p>
+    </li>`;
+  });
+  return `<section class="top ${action}"><h2>${title}<span>${hint}</span></h2>${
+    rows.length ? `<ol>${rows.join("")}</ol>` : `<p class="empty">Gerade nichts.</p>`
+  }</section>`;
+}
+
+/** Was sich in den eigenen Scans seit der Vorwoche wirklich bewegt hat, nur wenn es Daten gibt */
+function moverLists(moved: { up: Mover[]; down: Mover[] }, meta: Meta): string {
+  if (moved.up.length + moved.down.length === 0) return "";
+  const list = (title: string, kind: "buy" | "sell", items: Mover[]) =>
+    `<section class="moved ${kind}"><h3>${title}</h3>${
+      items.length
+        ? `<ol>${items
+            .map(
+              (m) => `<li><a class="item q${meta.get(m.itemId)?.quality ?? 1}" href="${wowheadUrl(m.itemId)}" target="_blank" rel="noopener">${iconTag(m.itemId, m.name, meta, 28)}<span class="name">${esc(m.name)}</span></a>
+              <span class="chg">${pct(m.change)}</span><span class="was">${coins(m.before)} <span class="arrow">→</span> ${coins(m.price)}</span></li>`,
+            )
+            .join("")}</ol>`
+        : `<p class="empty">Nichts Auffälliges.</p>`
+    }</section>`;
+  return `<h2 class="sect">📊 Echte Bewegung seit letzter Woche</h2><div class="duo">${list("🚀 Gestiegen", "buy", moved.up)}${list("🔻 Gefallen", "sell", moved.down)}</div>`;
 }
 
 function grid(list: Prediction[], meta: Meta): string {
@@ -122,6 +173,36 @@ h1 { font-size: 1.35rem; margin: 0; display: flex; align-items: center; gap: 10p
 .login button { background: var(--accent); color: #1b1206; border: 0; border-radius: 10px; padding: 9px 16px; font-weight: 700; cursor: pointer; }
 .muted { color: var(--muted); }
 code { background: var(--panel); padding: 1px 6px; border-radius: 6px; }
+.duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; margin: 16px 0; }
+.top { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 14px 6px; border-top: 3px solid var(--green); }
+.top.sell { border-top-color: var(--red); }
+.top h2, .moved h3 { margin: 0 0 10px; font-size: 1.05rem; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.top h2 span { color: var(--muted); font-size: .8rem; font-weight: 500; }
+.top ol, .moved ol { list-style: none; margin: 0; padding: 0; }
+.rank { display: grid; grid-template-columns: 26px 1fr auto; column-gap: 10px; align-items: center; padding: 8px 4px; border-top: 1px solid var(--line); cursor: pointer; }
+.rank:first-child { border-top: 0; }
+.rank .pos { grid-row: span 2; align-self: center; text-align: center; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rank:nth-child(-n+3) .pos { color: var(--accent); font-size: 1.1rem; }
+.rank .item { padding-right: 0; min-height: 40px; }
+.rank .icon { width: 40px; height: 40px; }
+.rank .badge { position: static; justify-self: end; }
+.rank .sub { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); font-size: .85rem; margin-top: 4px; }
+.rank .sub .price { font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.rank .why { grid-column: 2 / 4; }
+.rank.open .why { display: block; }
+.sell .badge { color: var(--red); background: rgba(255, 95, 82, .12); }
+.buy .badge { color: var(--green); background: rgba(61, 220, 132, .12); }
+.sect { font-size: 1rem; color: var(--muted); margin: 22px 0 0; }
+.moved { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+.moved li { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+.moved li:first-child { border-top: 0; }
+.moved .item { padding-right: 0; min-height: 28px; gap: 8px; }
+.moved .icon { width: 28px; height: 28px; border-radius: 6px; }
+.moved .chg { font-weight: 800; color: var(--green); }
+.moved.sell .chg { color: var(--red); }
+.moved .was { grid-column: 1 / 3; color: var(--muted); font-size: .82rem; padding-left: 36px; }
+.all-toggle { display: block; margin: 18px auto; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+.all-toggle.on { border-color: var(--accent); }
 `;
 
 const SCRIPT = `
@@ -131,9 +212,15 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
 }));
 document.querySelectorAll('.more').forEach(b => b.addEventListener('click', () => b.previousElementSibling.classList.add('showall')));
 document.addEventListener('click', e => {
-  const c = e.target.closest('.card');
+  const c = e.target.closest('.card, .rank');
   if (c && !e.target.closest('a')) c.classList.toggle('open');
 });
+document.querySelectorAll('.all-toggle').forEach(b => b.addEventListener('click', () => {
+  const all = document.querySelector('.all');
+  all.hidden = !all.hidden;
+  b.classList.toggle('on', !all.hidden);
+  if (!all.hidden) all.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}));
 const q = document.querySelector('.search');
 if (q) q.addEventListener('input', () => {
   const v = q.value.trim().toLowerCase();
@@ -180,6 +267,15 @@ export function homePage(ctx: AppContext, req: Request, allowed: boolean): Respo
       // Fehlende Icons im Hintergrund holen, beim nächsten Laden sind sie da
       const missing = ids.filter((id) => !meta.get(id)?.icon);
       if (missing.length > 0) void resolveIcons(ctx.repo, missing, { max: 120, fetchImpl: ctx.iconFetch }).catch(() => {});
+      const top = weeklyTop(predictions);
+      const moved = movers(ctx.repo.marketItems(main.realm, (ctx.now ?? Date.now)()));
+      // Namen wie bei den Prognosen: Scan, sonst Wissensbasis
+      const known = new Map<number, string>([
+        ...ctx.knowledge.items.map((i) => [i.id, i.name] as [number, string]),
+        ...predictions.map((p) => [p.itemId, p.itemName] as [number, string]),
+      ]);
+      for (const m of [...moved.up, ...moved.down]) if (m.name === `Item ${m.itemId}`) m.name = known.get(m.itemId) ?? m.name;
+      const movedMeta = ctx.repo.itemMeta([...moved.up, ...moved.down].map((m) => m.itemId));
       body = `
         <div class="chips">
           <span class="chip">🌍 <b>${esc(main.realm)}</b></span>
@@ -187,15 +283,23 @@ export function homePage(ctx: AppContext, req: Request, allowed: boolean): Respo
           <span class="chip">🤖 <b>${main.assessed}</b> bewertet</span>
           ${brief ? `<span class="chip">📰 <a href="${link("/brief")}">Lagebericht ${when(brief.createdAt)}</a> · ${brief.sources.length} Quellen</span>` : ""}
         </div>
-        <div class="bar">
-          <div class="tabs" role="tablist">
-            <button class="tab" role="tab" aria-selected="true" data-panel="sell">🔴 Verkaufen<span class="n">${sells.length}</span></button>
-            <button class="tab" role="tab" aria-selected="false" data-panel="buy">🟢 Kaufen<span class="n">${buys.length}</span></button>
-          </div>
-          <input class="search" type="search" placeholder="Item suchen …" aria-label="Item suchen">
+        <div class="duo">
+          ${topList("📈 Gewinner der Woche", "jetzt kaufen", "buy", top.winners, meta)}
+          ${topList("📉 Verlierer der Woche", "jetzt verkaufen", "sell", top.losers, meta)}
         </div>
-        <section class="panel active" id="sell">${grid(sells, meta)}</section>
-        <section class="panel" id="buy">${grid(buys, meta)}</section>`;
+        ${moverLists(moved, movedMeta)}
+        <button class="all-toggle" type="button">🔎 Alle ${sells.length + buys.length} Signale durchsuchen</button>
+        <div class="all" hidden>
+          <div class="bar">
+            <div class="tabs" role="tablist">
+              <button class="tab" role="tab" aria-selected="true" data-panel="sell">🔴 Verkaufen<span class="n">${sells.length}</span></button>
+              <button class="tab" role="tab" aria-selected="false" data-panel="buy">🟢 Kaufen<span class="n">${buys.length}</span></button>
+            </div>
+            <input class="search" type="search" placeholder="Item suchen …" aria-label="Item suchen">
+          </div>
+          <section class="panel active" id="sell">${grid(sells, meta)}</section>
+          <section class="panel" id="buy">${grid(buys, meta)}</section>
+        </div>`;
     }
   }
 

@@ -147,7 +147,44 @@ export async function sendDiscord(
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
   extras: DiscordExtras = {},
 ): Promise<void> {
-  for (const { embeds } of discordMessages(alerts, extras)) {
+  await postDiscord(webhookUrl, discordMessages(alerts, extras), fetchImpl, sleep);
+}
+
+/**
+ * Wochenrückblick: eine Nachricht mit den 10 Gewinnern (jetzt kaufen), eine mit den
+ * 10 Verlierern (jetzt verkaufen). Platz vor dem Namen, sonst wie die Alert-Karten.
+ */
+export function weeklyMessages(
+  realm: string,
+  top: { winners: Prediction[]; losers: Prediction[] },
+  extras: DiscordExtras = {},
+  now = Date.now(),
+): DiscordMessage[] {
+  const host = extras.publicUrl?.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const block = (list: Prediction[], header: string): DiscordMessage | null => {
+    if (list.length === 0) return null;
+    const embeds = list.map((p, i) => {
+      const c = card(p, extras, i === 0 ? header : undefined);
+      return { ...c, title: `${i + 1}. ${c.title}`.slice(0, 256) };
+    });
+    const last = embeds[embeds.length - 1]!;
+    last.footer = { text: [realm, host ? `alle Signale auf ${host}` : null].filter(Boolean).join(" · ") };
+    last.timestamp = new Date(now).toISOString();
+    return { embeds };
+  };
+  return [block(top.winners, "📈 GEWINNER DER WOCHE · jetzt kaufen"), block(top.losers, "📉 VERLIERER DER WOCHE · jetzt verkaufen")].filter(
+    (m): m is DiscordMessage => m !== null,
+  );
+}
+
+/** Schickt fertige Nachrichten, mit Rücksicht auf Discords Rate-Limit */
+export async function postDiscord(
+  webhookUrl: string,
+  messages: DiscordMessage[],
+  fetchImpl: typeof fetch = fetch,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<void> {
+  for (const { embeds } of messages) {
     for (let attempt = 0; ; attempt++) {
       try {
         const res = await fetchImpl(webhookUrl, {
