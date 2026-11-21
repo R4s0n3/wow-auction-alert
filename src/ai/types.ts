@@ -75,11 +75,13 @@ const cut = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)
 
 /** Begrenzt Zahlen, verwirft kaputte Daten und kürzt Texte. Das Schema garantiert nur die Form. */
 export function sanitizeAssessment(a: Assessment): Assessment {
-  const changePct = Number.isFinite(a.changePct) ? clamp(a.changePct, -95, 500) : 0;
+  // Die Richtung ist die eigentliche Entscheidung, das Vorzeichen der Zahl ein häufiger
+  // Flüchtigkeitsfehler ("down" mit 70 statt -70). Also zählt die Richtung, die Zahl folgt ihr.
+  const size = Number.isFinite(a.changePct) ? Math.abs(a.changePct) : 0;
+  const changePct = a.direction === "up" ? clamp(size, 0, 500) : a.direction === "down" ? -clamp(size, 0, 95) : 0;
   return {
     itemId: a.itemId,
-    // "up" mit negativer Änderung ergibt keinen Sinn, dann zählt die Richtung der Zahl
-    direction: a.direction === "flat" || changePct === 0 ? "flat" : changePct > 0 ? "up" : "down",
+    direction: changePct === 0 ? "flat" : a.direction,
     changePct: Number(changePct.toFixed(1)),
     confidence: Number.isFinite(a.confidence) ? Number(clamp(a.confidence, 0, 1).toFixed(2)) : 0,
     buyBy: validDate(a.buyBy),

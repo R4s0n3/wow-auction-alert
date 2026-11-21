@@ -44,11 +44,11 @@ function assessment(over: Partial<StoredAssessment> = {}): StoredAssessment {
 }
 
 describe("sanitizeAssessment", () => {
-  test("begrenzt Zahlen, verwirft kaputte Daten, Richtung folgt dem Vorzeichen", () => {
+  test("begrenzt Zahlen, verwirft kaputte Daten, das Vorzeichen folgt der Richtung", () => {
     const a = sanitizeAssessment({
       itemId: 1,
-      direction: "up",
-      changePct: -900,
+      direction: "down",
+      changePct: 900,
       confidence: 1.7,
       buyBy: "2026-02-31",
       sellFrom: "morgen",
@@ -65,6 +65,10 @@ describe("sanitizeAssessment", () => {
     expect(a.driver).toBe("x");
     expect(a.reason).toHaveLength(300);
     expect(sanitizeAssessment({ ...a, direction: "up", changePct: 0 }).direction).toBe("flat");
+    // DeepSeek am 2026-11-21: "bricht ein" mit +70 → bleibt down, Zahl wird negativ
+    expect(sanitizeAssessment({ ...a, direction: "down", changePct: 70 })).toMatchObject({ direction: "down", changePct: -70 });
+    expect(sanitizeAssessment({ ...a, direction: "up", changePct: -40 })).toMatchObject({ direction: "up", changePct: 40 });
+    expect(sanitizeAssessment({ ...a, direction: "flat", changePct: 25 })).toMatchObject({ direction: "flat", changePct: 0 });
   });
 });
 

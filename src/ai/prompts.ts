@@ -52,7 +52,7 @@ export function assessSystem(today: string, brief: string): string {
 
 Für jedes Item sagst du, wohin sich der Preis in den nächsten etwa 6 Wochen voraussichtlich bewegt, relativ zum aktuellen Preis:
 - direction: "up", "down" oder "flat". "flat" ist richtig, wenn du keinen konkreten Treiber siehst. Ohne Treiber zu raten, kostet echte Spieler echtes Gold.
-- changePct: erwartete Änderung in Prozent bis zum Peak (bei up) oder Tief (bei down). Bei flat 0.
+- changePct: erwartete Änderung in Prozent bis zum Peak (bei up, positiv, z. B. 40) oder Tief (bei down, negativ, z. B. -30). Bei flat 0.
 - confidence: 0 bis 1. Etwa 0.2 = vage Vermutung, 0.5 = plausibler Treiber mit Quelle, 0.8 = bestätigter Treiber mit Termin, und der Preis hat noch nicht reagiert.
 - buyBy: letzter sinnvoller Kauftag (YYYY-MM-DD) oder null.
 - sellFrom / sellBy: Verkaufsfenster (YYYY-MM-DD) oder null. Bei down ist sellBy der Tag, bis zu dem man Bestände loswerden sollte.

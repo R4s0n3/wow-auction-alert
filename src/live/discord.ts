@@ -1,5 +1,6 @@
 import type { Alert } from "../db/repo.ts";
 import type { Action, Prediction } from "../engine/predict.ts";
+import { byWorth } from "../engine/rank.ts";
 
 // Eine Nachricht pro Realm und Durchlauf, darin eine Karte (Embed) pro Aktion,
 // pro Item eine Zeile mit Symbolen statt Sätzen. Die Begründung steht im Spiel
@@ -71,7 +72,6 @@ export function alertLine(p: Prediction): string {
   return parts.join(" · ");
 }
 
-const strength = (p: Prediction) => (p.action === "buy" ? p.netUpside : Math.abs(p.impact)) * p.confidence;
 
 export function discordMessages(alerts: Alert[]): DiscordMessage[] {
   const realms = new Map<string, Alert[]>();
@@ -83,7 +83,8 @@ export function discordMessages(alerts: Alert[]): DiscordMessage[] {
     for (const card of CARDS) {
       const group = list.map((a) => a.prediction).filter((p) => p.action === card.action);
       if (group.length === 0) continue;
-      group.sort((a, b) => strength(b) - strength(a));
+      // Nach Gold pro Stück, nicht nach Prozent: -30 % auf 95g schlagen -70 % auf 97c
+      group.sort(byWorth);
       const lines: string[] = [];
       // Haben alle denselben Anlass (typisch bei den Handregeln), steht er einmal oben
       if (new Set(group.map((p) => p.eventName)).size === 1) {

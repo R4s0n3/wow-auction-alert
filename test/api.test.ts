@@ -163,6 +163,10 @@ describe("Startseite", () => {
     expect(html).toContain("<td>eu</td>");
     expect(html).toContain('href="/predictions?realm=eu"');
     expect(html).toContain("Noch keiner"); // kein Lagebericht
+    // Listen für den Realm mit dem neuesten Scan: vor dem Raid nur Kaufen
+    expect(html).toContain("Lohnt sich jetzt zu verkaufen · eu");
+    expect(html.split("Jetzt kaufen · eu")[0]).toContain("Gerade nichts.");
+    expect(html.split("Jetzt kaufen · eu")[1]).toMatch(/<td>Pestblüte<\/td><td>📈 \+\d+ %<\/td>/);
     expect((await fetch(url("/favicon.ico"))).status).toBe(204);
   });
 
@@ -249,6 +253,12 @@ describe("Discord", () => {
     expect(lines).toHaveLength(11); // verschiedene Treiber: keine Anlass-Zeile
     expect(lines[0]).toStartWith("**Item 14**");
     expect(lines.at(-1)).toBe("➕ 4 weitere · im Spiel `/wahp list`");
+  });
+
+  test("sortiert nach Gold pro Stück: Lotus mit -30 % vor der Kiste für 97c mit -70 %", () => {
+    const crate = ai({ itemId: 3, itemName: "Abgefangene Kiste", impact: -0.7, currentPrice: 97, expectedPeakPrice: 29, confidence: 0.65, eventName: "x" });
+    const lines = discordMessages([alertOf(crate), alertOf(ai())])[0]!.embeds[0]!.description.split("\n");
+    expect(lines.map((l) => l.split(" · ")[0])).toEqual(["**Schwarzer Lotus**", "**Abgefangene Kiste**"]);
   });
 
   test("Verkaufen-Karte steht vor der Kaufen-Karte", () => {

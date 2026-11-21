@@ -1,4 +1,30 @@
+import type { Action, Prediction } from "../engine/predict.ts";
+import { byWorth } from "../engine/rank.ts";
+import { predictionsFor } from "../engine/run.ts";
+import { dots, shortGold } from "../live/discord.ts";
 import type { AppContext } from "./server.ts";
+
+const TOP = 15;
+const shortDate = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+const pct = (x: number) => `${x >= 0 ? "+" : "−"}${Math.abs(Math.round(x * 100))} %`;
+
+/** Eine Tabellenzeile: was, wie viel, Preis jetzt → Ziel, bis wann, wie sicher. Begründung beim Drüberfahren. */
+function row(p: Prediction): string {
+  const change = p.action === "buy" ? `📈 ${pct(p.netUpside)}` : p.impact < 0 ? `📉 ${pct(p.impact)}` : "💰 Peak";
+  const prices =
+    p.currentPrice === null ? "–" : p.expectedPeakPrice === null || p.impact >= 0 && p.action === "sell" ? shortGold(p.currentPrice) : `${shortGold(p.currentPrice)} → ${shortGold(p.expectedPeakPrice)}`;
+  const until = p.action === "buy" ? (p.buyUntil ? shortDate(p.buyUntil) : "–") : p.sellTo ? shortDate(p.sellTo) : "jetzt";
+  const why = p.drivers[0] ? (p.source === "ai" ? p.drivers[0].reason : `${p.drivers[0].chain}. ${p.drivers[0].reason}`) : p.eventName;
+  return `<tr title="${esc(why)}"><td>${esc(p.itemName)}</td><td>${change}</td><td>${prices}</td><td>${until}</td><td class="dots">${dots(p.confidence)}${p.source === "ai" ? " 🤖" : ""}</td></tr>`;
+}
+
+function topTable(list: Prediction[], action: Action): string {
+  const top = list.filter((p) => p.action === action).sort(byWorth);
+  if (top.length === 0) return `<p class="muted">Gerade nichts.</p>`;
+  const more = top.length > TOP ? `<p class="muted" style="margin-top:8px">+${top.length - TOP} weitere · im Spiel <code>/wahp list</code></p>` : "";
+  const head = action === "buy" ? "kaufen bis" : "verkaufen bis";
+  return `<div class="scroll"><table><thead><tr><th>Item</th><th>Erwartung</th><th>Preis jetzt → Ziel</th><th>${head}</th><th>Sicherheit</th></tr></thead><tbody>${top.slice(0, TOP).map(row).join("")}</tbody></table></div>${more}`;
+}
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -22,6 +48,10 @@ table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nu
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 500; font-size: .875rem; }
 .scroll { overflow-x: auto; }
+.dots { white-space: nowrap; letter-spacing: 1px; }
+tbody tr[title] { cursor: help; }
+td { white-space: nowrap; }
+td:first-child { white-space: normal; }
 a { color: var(--accent); }
 ul { margin: 0; padding-left: 20px; }
 form { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -55,6 +85,13 @@ export function homePage(ctx: AppContext, req: Request, allowed: boolean): Respo
   } else {
     const realms = ctx.repo.overview();
     const brief = ctx.repo.latestBrief();
+    // Die Listen für den Realm mit dem neuesten Scan, sortiert nach Gold pro Stück
+    const main = realms[0]?.realm;
+    const predictions = main ? predictionsFor(ctx, main, (ctx.now ?? Date.now)()) : [];
+    const lists = main
+      ? `<h2>🔴 Lohnt sich jetzt zu verkaufen · ${esc(main)}</h2><div class="card">${topTable(predictions, "sell")}</div>
+         <h2>🟢 Jetzt kaufen · ${esc(main)}</h2><div class="card">${topTable(predictions, "buy")}</div>`
+      : "";
     const rows = realms
       .map(
         (r) => `<tr><td>${esc(r.realm)}</td><td>${when(r.lastScan)}</td><td>${r.items}</td><td>${r.assessed}</td>
@@ -65,6 +102,7 @@ export function homePage(ctx: AppContext, req: Request, allowed: boolean): Respo
       )
       .join("");
     body = `
+      ${lists}
       <h2>Realms</h2>
       <div class="card">${
         realms.length === 0
