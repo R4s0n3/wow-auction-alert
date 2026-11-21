@@ -6,9 +6,10 @@ import type { Action, Prediction } from "../engine/predict.ts";
 // im Tooltip (Shift), hier nur das, was man zum Handeln braucht.
 
 const MAX_LINES = 10;
+// Verkaufen zuerst: was man jetzt loswerden sollte, ist für die meisten wichtiger
 const CARDS: Array<{ action: Action; title: string; color: number; deadline: string }> = [
-  { action: "buy", title: "🟢 KAUFEN", color: 0x2ecc71, deadline: "kaufen bis" },
   { action: "sell", title: "🔴 VERKAUFEN", color: 0xe74c3c, deadline: "verkaufen bis" },
+  { action: "buy", title: "🟢 KAUFEN", color: 0x2ecc71, deadline: "kaufen bis" },
 ];
 
 interface Embed {

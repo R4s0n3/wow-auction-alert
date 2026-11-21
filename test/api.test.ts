@@ -251,6 +251,11 @@ describe("Discord", () => {
     expect(lines.at(-1)).toBe("➕ 4 weitere · im Spiel `/wahp list`");
   });
 
+  test("Verkaufen-Karte steht vor der Kaufen-Karte", () => {
+    const [msg] = discordMessages([alertOf(ai({ action: "buy", itemId: 2, itemName: "Pestblüte", impact: 0.5, netUpside: 0.4, buyUntil: "2026-12-05" })), alertOf(ai())]);
+    expect(msg!.embeds.map((e) => e.title)).toEqual(["🔴 VERKAUFEN · 1", "🟢 KAUFEN · 1"]);
+  });
+
   test("schickt Embeds ohne Erwähnungen, eine Nachricht pro Realm", async () => {
     const { alerts } = runEngine(ctx, NOW);
     const calls: Array<{ embeds: unknown[]; allowed_mentions: unknown; username: string }> = [];

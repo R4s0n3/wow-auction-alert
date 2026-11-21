@@ -14,6 +14,7 @@ Was zählt, ist alles, was Angebot oder Nachfrage einzelner Items in den nächst
 - Neue oder geänderte Items, Drops, Sets, Ruf-Belohnungen, die Materialien verbrauchen
 - Angebotsseite: Änderungen an Farmgebieten, Kräuter- und Erzvorkommen, Dropchancen, Bots, Spielerzahlen, Levelfortschritt der Spieler
 - Was Spieler über das AH berichten: welche Preise gerade explodieren oder einbrechen und warum
+- Verkaufschancen: was gerade deutlich teurer ist als normal (Launch-Knappheit, Hype, wenige Anbieter) und absehbar fallen wird. Für Spieler mit vollen Taschen ist das die wichtigste Information.
 
 Bevorzuge offizielle Quellen (Blizzard-News, Patchnotes, Bluetracker) und große Fan-Seiten (Wowhead, Icy Veins, warcraft.wiki.gg). Reddit und Foren sind gut für Marktbeobachtungen, aber kennzeichne sie als Community-Meinung. Datamining ist unbestätigt.
 
@@ -38,7 +39,8 @@ Recherchiere den aktuellen Stand und schreib einen Lagebericht auf Deutsch, höc
 3. Berufe, Rezepte und neue Items, die anders sind als in Classic 1.12
 4. Angebotsseite (Farmen, Spielerfortschritt, Bots)
 5. Was gerade am Markt passiert (Community-Berichte)
-6. Offene Fragen und Unsicherheiten
+6. Verkaufschancen: welche Items oder Item-Gruppen gerade über dem Normalniveau liegen, warum, und wann sie voraussichtlich fallen
+7. Offene Fragen und Unsicherheiten
 
 Gib bei jedem Fakt die Quelle als URL an.`;
 }
@@ -58,6 +60,7 @@ Für jedes Item sagst du, wohin sich der Preis in den nächsten etwa 6 Wochen vo
 - reason: ein bis zwei Sätze auf Deutsch, konkret. Bei flat reicht ein kurzer Satz.
 
 Worauf es ankommt:
+- Verkaufen ist genauso wichtig wie Kaufen. Liegt ein Preis jetzt klar über dem Niveau, das du nach der Launch-Phase erwartest (Knappheit, Hype, wenige Anbieter), und wird er absehbar fallen, dann down mit sellBy in den nächsten Tagen. Ein hoher Preis allein reicht nicht, es braucht einen Grund, warum er fällt.
 - Nachfrage wandert über Rezepte: Wenn ein Raid Feuerschutztränke braucht, steigen auch die Materialien dafür.
 - Was schon eingepreist ist, steigt nicht nochmal. Die Spalte Trend zeigt die Veränderung zur Vorwoche.
 - Nach einem Launch fallen viele Rohstoffpreise, weil immer mehr Spieler Stufe 60 erreichen und farmen. Das gilt besonders für Materialien ohne Endgame-Nachfrage.
