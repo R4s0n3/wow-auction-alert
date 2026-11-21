@@ -453,6 +453,27 @@ describe("runAnalysis gegen nachgebaute Claude-API", () => {
     expect(r.costUsd).toBeCloseTo(4 * 0.02 + 0.028 + 0.03, 6);
   });
 
+  test("DeepSeek über OpenRouter: Modellname bleibt, OpenRouter-Suche, nur passende Anbieter", async () => {
+    const model = "deepseek/deepseek-v4.1-flash-1017";
+    const config = { ...loadConfig({ OPENROUTER_API_KEY: "or-test", AI_MODEL: model }), aiChunkSize: 3, aiConcurrency: 2 };
+    const { deps } = setup(config);
+    const client = createClient(config, mock.url.origin);
+    const r = await runAnalysis({ ...deps, client: () => client }, { realm: REALM });
+    expect(r).toMatchObject({ candidates: 4, assessed: 4, failedChunks: 0 });
+
+    for (const c of calls) {
+      expect(c.body.model).toBe(model);
+      expect(c.body.provider).toEqual({ require_parameters: true, quantizations: ["fp8", "bf16", "fp16", "unknown"] });
+      expect(c.body.fallbacks).toBeUndefined();
+    }
+    const rc = researchCalls();
+    expect(rc[0]!.body.tools).toEqual([{ type: "openrouter:web_search", parameters: { max_results: 5, max_uses: 10 } }]);
+    expect(rc[1]!.body.tools[0].parameters.max_uses).toBe(7); // 3 Suchen verbraucht
+    expect(rc[0]!.body.cache_control).toBeUndefined();
+    expect(assessCalls()[0]!.body.output_config.format.type).toBe("json_schema");
+    expect(estimateCostUsd(model, 6608, 40, 17_739)).toBeLessThan(2);
+  });
+
   test("ohne Scans gibt es eine klare Meldung", async () => {
     const { deps } = setup();
     expect(runAnalysis(deps, { realm: "eu-leer-horde" })).rejects.toThrow("Keine Scan-Daten");

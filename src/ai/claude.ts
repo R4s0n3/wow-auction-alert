@@ -33,9 +33,20 @@ export const OPENROUTER_ENDPOINTS = ["anthropic", "claude-on-aws"];
  * etwas anderes (eine Modell-Liste bei Ausfällen), dort legen wir stattdessen die
  * Rechenzentren fest, günstigste zuerst (der doppelt so teure Fast-Endpunkt nur als letzter Ausweg).
  */
-function providerParams(provider: AiProvider) {
+/** Claude-Modell? claude-opus-5-5 oder anthropic/claude-opus-5.5 */
+export const isClaude = (model: string) => /(^|\/)claude-/.test(model);
+
+/**
+ * Andere Modelle über OpenRouter (z. B. deepseek/deepseek-v4.1-flash-1017): nur Anbieter,
+ * die alles können, was wir schicken (strukturierte Ausgabe, Reasoning), und keine
+ * 4-Bit-Varianten, die bei solchen Aufgaben spürbar schlechter werden.
+ */
+export const OPENROUTER_QUANTIZATIONS = ["fp8", "bf16", "fp16", "unknown"];
+
+function providerParams(provider: AiProvider, model: string) {
   if (provider === "anthropic") return { betas: [FALLBACK_BETA], fallbacks: "default" as const };
-  return { provider: { only: OPENROUTER_ENDPOINTS, sort: "price" } };
+  if (isClaude(model)) return { provider: { only: OPENROUTER_ENDPOINTS, sort: "price" } };
+  return { provider: { require_parameters: true, quantizations: OPENROUTER_QUANTIZATIONS } };
 }
 
 interface Tokens {
@@ -100,11 +111,13 @@ export const PRICES: Record<string, { input: number; output: number; cacheRead: 
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1 },
   "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01 },
   "claude-fable-5-2": { input: 8, output: 40, cacheRead: 0.2 },
+  // Nur für die Schätzung vorab (mittlerer Anbieterpreis), echte Kosten schickt OpenRouter mit
+  "deepseek/deepseek-v4.1-flash-1017": { input: 0.1, output: 0.5, cacheRead: 0.01 },
 };
 
 /** Preise für claude-opus-5-5 und die OpenRouter-Schreibweise anthropic/claude-opus-5.5 */
 export function priceFor(model: string): (typeof PRICES)[string] | null {
-  return PRICES[model.replace(/^anthropic\//, "").replace(/\./g, "-")] ?? null;
+  return PRICES[model] ?? PRICES[model.replace(/^anthropic\//, "").replace(/\./g, "-")] ?? null;
 }
 
 function checkStop(msg: BetaMessage, what: string): void {
@@ -182,7 +195,12 @@ export async function research(
   for (let turn = 0; ; turn++) {
     if (turn >= MAX_CONTINUATIONS) throw new AiError("Recherche: zu viele Fortsetzungen, Abbruch");
     // max_uses gilt pro Anfrage, deshalb bei jeder Fortsetzung nur noch den Rest erlauben
-    const tools: BetaToolUnion[] = [{ type: "web_search_20260209", name: "web_search", max_uses: Math.max(1, maxSearches - searches) }];
+    const left = Math.max(1, maxSearches - searches);
+    const claude = opts.provider === "anthropic" || isClaude(opts.model);
+    const tools: BetaToolUnion[] = claude
+      ? [{ type: "web_search_20260209", name: "web_search", max_uses: left }]
+      : // Andere Modelle haben keine eigene Websuche, OpenRouter sucht dann selbst (Exa & Co.)
+        [{ type: "openrouter:web_search", parameters: { max_results: 5, max_uses: left } } as unknown as BetaToolUnion];
     // OpenRouter reicht die Websuche im Anthropic-Format durch, Web-Fetch nicht
     if (opts.provider === "anthropic") {
       tools.push({ type: "web_fetch_20260209", name: "web_fetch", max_uses: Math.max(1, MAX_FETCHES - fetches) });
@@ -191,9 +209,10 @@ export async function research(
       .stream({
         model: opts.model,
         max_tokens: 64_000,
-        ...providerParams(opts.provider),
-        // Fortsetzungen schicken alle Suchergebnisse nochmal mit: aus dem Cache kosten sie ein Zehntel
-        cache_control: { type: "ephemeral" },
+        ...providerParams(opts.provider, opts.model),
+        // Fortsetzungen schicken alle Suchergebnisse nochmal mit: aus dem Cache kosten sie ein Zehntel.
+        // Andere Modelle cachen bei OpenRouter von selbst.
+        ...(claude ? { cache_control: { type: "ephemeral" as const } } : {}),
         thinking: { type: "adaptive" },
         output_config: { effort: opts.effort },
         system: opts.system,
@@ -244,7 +263,7 @@ export async function assessChunk(
   const msg = await client.beta.messages.create({
     model: opts.model,
     max_tokens: 16_000,
-    ...providerParams(opts.provider),
+    ...providerParams(opts.provider, opts.model),
     thinking: { type: "adaptive" },
     output_config: { effort: opts.effort, format: betaZodOutputFormat(AssessmentBatchSchema) },
     system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
