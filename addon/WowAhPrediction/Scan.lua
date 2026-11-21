@@ -10,10 +10,32 @@ local _, ns = ...
 
 local CHUNK = 500 -- Auktionen pro Frame, damit der Client nicht einfriert
 local MARKET_SHARE = 0.15 -- Marktpreis = Ø der günstigsten 15 % der Menge
+ns.SCAN_COOLDOWN = 15 * 60
+local REPLY_TIMEOUT = 60 -- so lange warten wir auf die Antwort des Servers
 
 local frame = CreateFrame("Frame")
 local scanning = false
 local ahOpen = false
+local fromWindow = false
+
+-- Andere Teile (das Fenster) hören hier mit: "ah", "scan-start", "scan-progress", "scan-done", "scan-abort"
+ns.listeners = ns.listeners or {}
+function ns.on(fn) ns.listeners[#ns.listeners + 1] = fn end
+local function notify(event, ...)
+  for _, fn in ipairs(ns.listeners) do fn(event, ...) end
+end
+
+function ns.isAhOpen() return ahOpen end
+function ns.isScanning() return scanning end
+function ns.scanStartedFromWindow() return fromWindow end
+
+-- Sekunden bis zum nächsten erlaubten Komplett-Scan, 0 = jetzt möglich
+function ns.cooldownLeft(now)
+  local scans = WAHP_DB and WAHP_DB.scans
+  local last = scans and scans[#scans]
+  if not last or not last.scannedAt then return 0 end
+  return math.max(0, last.scannedAt + ns.SCAN_COOLDOWN - (now or time()))
+end
 
 function ns.addAuction(agg, itemId, count, buyout)
   if not itemId or not count or count <= 0 or not buyout or buyout <= 0 then return end
@@ -83,7 +105,12 @@ local function finish(agg, names, auctions)
   }
   while #scans > ns.MAX_SCANS do table.remove(scans, 1) end
   scanning = false
-  ns.print(("Scan fertig: %d Auktionen, %d Items. Nach /reload lädt der Companion ihn hoch."):format(auctions, itemCount))
+  if fromWindow then
+    ns.print(("Scan fertig: %d Auktionen, %d Items. Gleich wird neu geladen, damit der Companion ihn hochlädt."):format(auctions, itemCount))
+  else
+    ns.print(("Scan fertig: %d Auktionen, %d Items. Nach /reload lädt der Companion ihn hoch."):format(auctions, itemCount))
+  end
+  notify("scan-done", auctions, itemCount)
 end
 
 -- Arbeitet die Auktionen in Häppchen über mehrere Frames ab.
@@ -103,6 +130,7 @@ local function process(getRow, first, last)
     if i > last then
       finish(agg, names, last - first + 1)
     else
+      notify("scan-progress", i - first, last - first + 1)
       C_Timer.After(0, step)
     end
   end
@@ -113,33 +141,56 @@ local function useModernApi()
   return C_AuctionHouse ~= nil and C_AuctionHouse.ReplicateItems ~= nil
 end
 
-function ns.startScan()
+local function abort(msg)
+  scanning = false
+  frame:UnregisterEvent("AUCTION_ITEM_LIST_UPDATE")
+  frame:UnregisterEvent("REPLICATE_ITEM_LIST_UPDATE")
+  ns.print(msg)
+  notify("scan-abort", msg)
+end
+
+-- opts.fromWindow: vom Knopf im Fenster gestartet, danach lädt das Fenster neu
+function ns.startScan(opts)
   if scanning then
     ns.print("Scan läuft schon.")
-    return
+    return false
   end
   if not ahOpen then
     ns.print("Öffne zuerst das Auktionshaus.")
-    return
+    return false
   end
+  local wait = ns.cooldownLeft()
   if useModernApi() then
+    if wait > 0 then
+      ns.print(("Komplett-Scan geht nur alle 15 Minuten. Noch %d Min."):format(math.ceil(wait / 60)))
+      return false
+    end
     scanning = true
     frame:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
     C_AuctionHouse.ReplicateItems()
+    -- Antwortet der Server nicht (z. B. Sperre, die wir nicht kennen), nicht ewig "scannen"
+    local started = time()
+    C_Timer.After(REPLY_TIMEOUT, function()
+      if scanning and frame.waiting == started then abort("Das Auktionshaus hat nicht geantwortet, Scan abgebrochen.") end
+    end)
+    frame.waiting = started
   elseif QueryAuctionItems then
     local _, canQueryAll = CanSendAuctionQuery()
     if not canQueryAll then
       ns.print("Komplett-Scan geht nur alle 15 Minuten. Versuch es gleich nochmal.")
-      return
+      return false
     end
     scanning = true
     frame:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
     QueryAuctionItems("", nil, nil, 0, nil, nil, true, false, nil)
   else
     ns.print("Dieser Client hat keine bekannte AH-Scan-API.")
-    return
+    return false
   end
+  fromWindow = opts and opts.fromWindow or false
   ns.print("Scanne das Auktionshaus, das kann einen Moment dauern …")
+  notify("scan-start")
+  return true
 end
 
 frame:RegisterEvent("AUCTION_HOUSE_SHOW")
@@ -147,16 +198,14 @@ frame:RegisterEvent("AUCTION_HOUSE_CLOSED")
 frame:SetScript("OnEvent", function(self, event)
   if event == "AUCTION_HOUSE_SHOW" then
     ahOpen = true
+    notify("ah", true)
   elseif event == "AUCTION_HOUSE_CLOSED" then
     ahOpen = false
-    if scanning then
-      scanning = false
-      self:UnregisterEvent("AUCTION_ITEM_LIST_UPDATE")
-      self:UnregisterEvent("REPLICATE_ITEM_LIST_UPDATE")
-      ns.print("Auktionshaus geschlossen, Scan abgebrochen.")
-    end
+    if scanning then abort("Auktionshaus geschlossen, Scan abgebrochen.") end
+    notify("ah", false)
   elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
     self:UnregisterEvent(event)
+    self.waiting = nil
     process(C_AuctionHouse.GetReplicateItemInfo, 0, C_AuctionHouse.GetNumReplicateItems() - 1)
   elseif event == "AUCTION_ITEM_LIST_UPDATE" then
     self:UnregisterEvent(event)

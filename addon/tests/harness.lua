@@ -5,14 +5,59 @@ DEFAULT_CHAT_FRAME = {
   AddMessage = function(_, msg) H.chat[#H.chat + 1] = msg end,
 }
 
-function CreateFrame()
-  local f = { events = {} }
-  function f:RegisterEvent(e) self.events[e] = true end
-  function f:UnregisterEvent(e) self.events[e] = nil end
-  function f:SetScript(_, fn) self.onEvent = fn end
+-- Frames, Texturen, FontStrings: alles dasselbe Objekt. Bekannte Methoden merken sich
+-- Zustand (Text, Sichtbarkeit, Scripts), unbekannte tun nichts. Reicht für UI-Code.
+local Methods = {}
+function Methods:RegisterEvent(e) self.events[e] = true end
+function Methods:UnregisterEvent(e) self.events[e] = nil end
+function Methods:SetScript(name, fn)
+  self.scripts[name] = fn
+  if name == "OnEvent" then self.onEvent = fn end
+end
+function Methods:GetScript(name) return self.scripts[name] end
+function Methods:Show()
+  local was = self.shown
+  self.shown = true
+  if not was and self.scripts.OnShow then self.scripts.OnShow(self) end
+end
+function Methods:Hide() self.shown = false end
+function Methods:IsShown() return self.shown end
+function Methods:SetText(t) self.text = t end
+function Methods:GetText() return self.text or "" end
+function Methods:Enable() self.enabled = true end
+function Methods:Disable() self.enabled = false end
+function Methods:IsEnabled() return self.enabled ~= false end
+function Methods:SetTexture(t) self.texture = t end
+function Methods:Click(button)
+  if self.scripts.OnClick then self.scripts.OnClick(self, button or "LeftButton") end
+end
+local newObject
+function Methods:CreateFontString() return newObject("FontString") end
+function Methods:CreateTexture() return newObject("Texture") end
+
+local function noop() end
+newObject = function(kind)
+  local o = { kind = kind, events = {}, scripts = {}, shown = true }
+  -- Unbekannte Methoden (WoW-Stil: SetSize, SetPoint …) tun nichts, unbekannte Felder sind nil
+  return setmetatable(o, {
+    __index = function(_, k)
+      if Methods[k] then return Methods[k] end
+      if type(k) == "string" and k:match("^%u") then return noop end
+      return nil
+    end,
+  })
+end
+
+function CreateFrame(kind, name, parent, template)
+  local f = newObject(kind or "Frame")
+  f.name, f.parent, f.template = name, parent, template
+  if name then _G[name] = f end
   H.frames[#H.frames + 1] = f
   return f
 end
+UIParent = newObject("Frame")
+UISpecialFrames = {}
+tinsert = table.insert
 
 function H.fire(event, ...)
   for _, f in ipairs(H.frames) do
@@ -20,10 +65,34 @@ function H.fire(event, ...)
   end
 end
 
-C_Timer = { After = function(_, fn) H.timers[#H.timers + 1] = fn end }
-function H.runTimers()
-  while #H.timers > 0 do table.remove(H.timers, 1)() end
+-- Timer mit Verzögerung. runTimers(max) führt nur Timer bis zu dieser Verzögerung aus,
+-- ohne Argument alle (auch die, die währenddessen dazukommen).
+C_Timer = { After = function(delay, fn) H.timers[#H.timers + 1] = { delay = delay or 0, fn = fn } end }
+function H.runTimers(maxDelay)
+  local ran = true
+  while ran do
+    ran = false
+    for i, t in ipairs(H.timers) do
+      if not maxDelay or t.delay <= maxDelay then
+        table.remove(H.timers, i)
+        t.fn()
+        ran = true
+        break
+      end
+    end
+  end
 end
+
+FauxScrollFrame_Update = function(frame, n) frame.total = n end
+FauxScrollFrame_GetOffset = function(frame) return frame.offset or 0 end
+FauxScrollFrame_OnVerticalScroll = function(frame, value, height, update)
+  frame.offset = math.floor(value / height + 0.5)
+  update(frame)
+end
+GetItemIcon = function(itemId) return "icon-" .. itemId end
+GetItemCount = function(itemId) return H.bags and H.bags[itemId] or 0 end
+C_UI = { Reload = function() H.reloads = (H.reloads or 0) + 1 end }
+ITEM_QUALITY_COLORS = { [0] = { hex = "|cff9d9d9d" }, [1] = { hex = "|cffffffff" }, [2] = { hex = "|cff1eff00" }, [3] = { hex = "|cff0070dd" } }
 
 time = os.time
 date = os.date
@@ -69,6 +138,10 @@ local function newTooltip()
   function t:HookScript(_, fn) self.hook = fn end
   function t:AddLine(text, r, g, b, wrap) self.lines[#self.lines + 1] = { text, r, g, b, wrap } end
   function t:GetItem() return "Name", self.link end
+  function t:SetOwner(owner) self.owner = owner end
+  function t:SetItemByID(itemId) self.item = itemId end
+  function t:Show() self.shown = true end
+  function t:Hide() self.shown = false end
   return t
 end
 GameTooltip = newTooltip()

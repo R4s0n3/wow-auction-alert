@@ -17,7 +17,7 @@ local function openAhAndScan(H, ns)
   H.fire("AUCTION_HOUSE_SHOW")
   ns.startScan()
   H.fire(H.api == "modern" and "REPLICATE_ITEM_LIST_UPDATE" or "AUCTION_ITEM_LIST_UPDATE")
-  H.runTimers()
+  H.runTimers(0)
 end
 
 -- 100 Pestblüte zu 40s, eine verramschte zu 1s, 20 Schwarzer Lotus.
@@ -99,7 +99,7 @@ test("AH schließen bricht den Scan ab", function()
   ns.startScan()
   H.fire("AUCTION_HOUSE_CLOSED")
   H.fire("AUCTION_ITEM_LIST_UPDATE")
-  H.runTimers()
+  H.runTimers(0)
   eq(#WAHP_DB.scans, 0)
   contains(H.chat[#H.chat], "abgebrochen")
 end)
@@ -169,11 +169,141 @@ test("/wahp list sortiert Verkaufen vor Kaufen", function()
   contains(H.chat[3], "Pestblüte")
 end)
 
+-- Fenster ---------------------------------------------------------------------
+
+local LOTUS = {
+  action = "sell", src = "ai", name = "Schwarzer Lotus", event = "Mehr Spieler auf 60", impact = -0.3,
+  confidence = 0.7, netUpside = -0.33, current = 950000, peak = 665000, sellTo = "2026-12-05", why = "Mehr Lotus-Farmer.",
+}
+local CRATE = {
+  action = "sell", src = "ai", name = "Abgefangene Kiste", event = "Writs brechen ein", impact = -0.7,
+  confidence = 0.65, netUpside = -0.72, current = 97, peak = 29, sellTo = "2026-11-28", why = "Händlerware ohne Abnehmer.",
+}
+local function withData()
+  WAHP_DATA = { realm = "eu-alliance", generatedAt = os.time(), items = { [13466] = { PRED }, [13468] = { LOTUS }, [5] = { CRATE } } }
+end
+
+test("Fenster: /wahp öffnet, Verkaufen nach Gold sortiert, Suche, Taschen, Details", function()
+  local H, ns = fresh()
+  withData()
+  SlashCmdList.WAHP("")
+  assert(WAHPFrame and WAHPFrame:IsShown(), "Fenster offen")
+  local rows = ns.ui.rows
+  eq(rows[1].itemId, 13468, "Lotus (-30 % auf 95g) vor der Kiste (-70 % auf 97c)")
+  eq(rows[2].itemId, 5)
+  eq(rows[3]:IsShown(), false)
+  contains(rows[1].badge.text, "-30 %")
+  contains(rows[1].sub.text, "95g 0s 0c")
+  contains(rows[1].sub.text, "66g 50s 0c")
+  contains(rows[1].sub.text, "bis 05.12.")
+  contains(rows[1].name.text, "Schwarzer Lotus")
+  contains(rows[1].name.text, "KI")
+  eq(rows[1].icon.texture, "icon-13468")
+  contains(ns.ui.tabs[1].button.text, "Verkaufen")
+  contains(ns.ui.tabs[1].button.text, "2")
+
+  ns.ui.setTab("buy")
+  eq(rows[1].itemId, 13466)
+  contains(rows[1].badge.text, "+41 %")
+  contains(rows[1].sub.text, "bis 05.12.")
+
+  ns.ui.setTab("sell")
+  ns.ui.search:SetText("lotus")
+  ns.ui.search.scripts.OnTextChanged(ns.ui.search)
+  eq(rows[1].itemId, 13468)
+  eq(rows[2]:IsShown(), false)
+  ns.ui.search:SetText("gibtsnicht")
+  ns.ui.search.scripts.OnTextChanged(ns.ui.search)
+  contains(ns.ui.empty.text, "Nichts gefunden")
+  ns.ui.search:SetText("")
+  ns.ui.search.scripts.OnTextChanged(ns.ui.search)
+
+  H.bags = { [5] = 40 }
+  ns.ui.setTab("bags")
+  eq(rows[1].itemId, 5)
+  contains(rows[1].sub.text, "40x")
+  eq(rows[2]:IsShown(), false)
+
+  rows[1]:Click()
+  contains(ns.ui.details.why.text, "KI: Writs brechen ein")
+  contains(ns.ui.details.why.text, "Händlerware ohne Abnehmer.")
+  eq(ns.ui.details.link.text, "https://www.wowhead.com/forever/de/item=5")
+  rows[1].scripts.OnEnter(rows[1])
+  eq(GameTooltip.item, 5, "Item-Tooltip beim Drüberfahren")
+end)
+
+test("Scan-Knopf: nur am AH, scannt, lädt nach Countdown neu, danach Cooldown", function()
+  local H, ns = fresh({ api = "modern" })
+  H.auctions = SAMPLE
+  withData()
+  SlashCmdList.WAHP("")
+  local b = ns.ui.scanButton
+  eq(b.enabled, false, "ohne AH aus")
+  contains(b.text, "am Auktionshaus")
+  H.fire("AUCTION_HOUSE_SHOW")
+  eq(b.enabled, true)
+  eq(b.text, "AH scannen")
+  b:Click()
+  contains(b.text, "Scanne")
+  H.fire("REPLICATE_ITEM_LIST_UPDATE")
+  H.runTimers(0)
+  eq(#WAHP_DB.scans, 1)
+  eq(b.text, "Abbrechen (Reload in 3)")
+  eq(H.reloads, nil, "noch nicht")
+  H.runTimers() -- Countdown läuft ab
+  eq(H.reloads, 1)
+  ns.ui.updateFooter()
+  eq(b.enabled, false)
+  eq(b.text, "Scan in 15 Min.")
+end)
+
+test("Scan-Knopf: Abbrechen verhindert den Reload, danach per Knopf neu laden", function()
+  local H, ns = fresh({ api = "modern" })
+  H.auctions = SAMPLE
+  H.fire("AUCTION_HOUSE_SHOW")
+  assert(WAHPFrame and WAHPFrame:IsShown(), "Fenster öffnet sich am AH von selbst")
+  local b = ns.ui.scanButton
+  b:Click()
+  H.fire("REPLICATE_ITEM_LIST_UPDATE")
+  H.runTimers(0)
+  b:Click() -- Abbrechen
+  H.runTimers()
+  eq(H.reloads, nil, "kein Reload nach Abbrechen")
+  eq(b.text, "Jetzt neu laden")
+  b:Click()
+  eq(H.reloads, 1)
+end)
+
+test("/wahp scan lädt nicht von selbst neu, /wahp auto schaltet das Öffnen am AH ab", function()
+  local H, ns = fresh()
+  H.auctions = SAMPLE
+  SlashCmdList.WAHP("auto")
+  contains(H.chat[#H.chat], "aus")
+  H.fire("AUCTION_HOUSE_SHOW")
+  eq(WAHPFrame, nil, "Fenster bleibt zu")
+  ns.startScan()
+  H.fire("AUCTION_ITEM_LIST_UPDATE")
+  H.runTimers()
+  eq(#WAHP_DB.scans, 1)
+  eq(H.reloads, nil)
+  contains(H.chat[#H.chat], "Nach /reload")
+end)
+
+test("modern-API: keine Antwort vom AH bricht nach einer Minute ab", function()
+  local H, ns = fresh({ api = "modern" })
+  H.fire("AUCTION_HOUSE_SHOW")
+  ns.startScan()
+  eq(ns.isScanning(), true)
+  H.runTimers() -- REPLICATE_ITEM_LIST_UPDATE kommt nie
+  eq(ns.isScanning(), false)
+  contains(H.chat[#H.chat], "nicht geantwortet")
+end)
+
 local mode = arg[1] or "test"
 if mode == "test" then
   local failed = 0
   for _, t in ipairs(tests) do
-    WAHP_DATA, WAHP_DB = nil, nil
+    WAHP_DATA, WAHP_DB, WAHPFrame, WAHPScroll = nil, nil, nil, nil
     local ok, err = pcall(t[2])
     print((ok and "ok   " or "FAIL ") .. t[1] .. (ok and "" or ("\n     " .. tostring(err))))
     if not ok then failed = failed + 1 end

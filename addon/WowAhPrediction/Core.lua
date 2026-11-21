@@ -44,6 +44,51 @@ local function colored(action)
 end
 ns.colored = colored
 
+-- Was eine Empfehlung pro Stück wert ist (Kupfer × Änderung × Sicherheit), wie auf dem Server
+function ns.worth(p)
+  local rel = p.action == "buy" and (p.netUpside or 0) or math.abs(p.impact or 0)
+  return (p.current or 1) * math.max(0, rel) * (p.confidence or 0)
+end
+
+function ns.itemCount(itemId)
+  if C_Item and C_Item.GetItemCount then return C_Item.GetItemCount(itemId, true) or 0 end
+  if GetItemCount then return GetItemCount(itemId, true) or 0 end
+  return 0
+end
+
+local BAG_ORDER = { sell = 1, hold = 2, avoid = 3, buy = 4, watch = 5 }
+
+-- Listen fürs Fenster und /wahp list. tab: "sell", "buy" oder "bags" (was du besitzt),
+-- query: Teil des Namens. Ergebnis: { itemId, p, count }, Wertvollstes zuerst.
+function ns.collect(tab, query)
+  local data = WAHP_DATA
+  local out = {}
+  if not data or not data.items then return out end
+  query = query and query ~= "" and string.lower(query) or nil
+  for itemId, preds in pairs(data.items) do
+    local p = preds[1]
+    if p and (not query or string.find(string.lower(p.name or ""), query, 1, true)) then
+      if tab == "bags" then
+        local count = ns.itemCount(itemId)
+        if count > 0 then out[#out + 1] = { itemId = itemId, p = p, count = count } end
+      elseif p.action == tab then
+        out[#out + 1] = { itemId = itemId, p = p }
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    if tab == "bags" then
+      local oa, ob = BAG_ORDER[a.p.action] or 9, BAG_ORDER[b.p.action] or 9
+      if oa ~= ob then return oa < ob end
+      return ns.worth(a.p) * a.count > ns.worth(b.p) * b.count
+    end
+    local wa, wb = ns.worth(a.p), ns.worth(b.p)
+    if wa ~= wb then return wa > wb end
+    return a.itemId < b.itemId
+  end)
+  return out
+end
+
 function ns.printList()
   local data = WAHP_DATA
   if not data or not data.items then
@@ -51,15 +96,9 @@ function ns.printList()
     return
   end
   local rows = {}
-  for itemId, preds in pairs(data.items) do
-    for _, p in ipairs(preds) do
-      if p.action == "buy" or p.action == "sell" then rows[#rows + 1] = { itemId = itemId, p = p } end
-    end
+  for _, tab in ipairs({ "sell", "buy" }) do
+    for _, r in ipairs(ns.collect(tab)) do rows[#rows + 1] = r end
   end
-  table.sort(rows, function(a, b)
-    if a.p.action ~= b.p.action then return a.p.action == "sell" end
-    return (a.p.netUpside or 0) > (b.p.netUpside or 0)
-  end)
   if #rows == 0 then
     ns.print("Gerade keine Kauf- oder Verkaufssignale.")
     return
@@ -94,20 +133,27 @@ end
 
 local function help()
   ns.print("Befehle:")
+  ns.print("  /wahp         Fenster mit Verkaufen, Kaufen, Taschen und Scan-Knopf")
   ns.print("  /wahp scan    AH komplett scannen (Auktionshaus muss offen sein)")
-  ns.print("  /wahp list    Aktuelle Kauf-/Verkaufssignale")
+  ns.print("  /wahp list    Aktuelle Kauf-/Verkaufssignale im Chat")
   ns.print("  /wahp status  Alter der Daten und letzter Scan")
+  ns.print("  /wahp auto    Fenster am Auktionshaus automatisch öffnen an/aus")
 end
 
 SLASH_WAHP1 = "/wahp"
 SlashCmdList.WAHP = function(msg)
   local cmd = string.lower(string.match(msg or "", "^%s*(.-)%s*$"))
-  if cmd == "scan" then
+  if cmd == "" and ns.toggleWindow then
+    ns.toggleWindow()
+  elseif cmd == "scan" then
     ns.startScan()
   elseif cmd == "list" then
     ns.printList()
   elseif cmd == "status" then
     ns.printStatus()
+  elseif cmd == "auto" then
+    WAHP_DB.settings.autoOpen = WAHP_DB.settings.autoOpen == false
+    ns.print("Fenster am Auktionshaus automatisch öffnen: " .. (WAHP_DB.settings.autoOpen and "an" or "aus"))
   else
     help()
   end
@@ -121,5 +167,6 @@ frame:SetScript("OnEvent", function(self, _, name)
   WAHP_DB.version = 1
   WAHP_DB.scans = WAHP_DB.scans or {}
   WAHP_DB.itemInfo = WAHP_DB.itemInfo or {}
+  WAHP_DB.settings = WAHP_DB.settings or {}
   self:UnregisterEvent("ADDON_LOADED")
 end)
