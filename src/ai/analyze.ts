@@ -32,6 +32,8 @@ export interface AnalyzeOptions {
   newBrief?: boolean;
   /** Nur zählen und Kosten schätzen, nichts anfragen */
   dryRun?: boolean;
+  /** Nur Items neu bewerten, deren letzte Bewertung eine dieser Richtungen hat */
+  redo?: Array<"up" | "down" | "flat">;
 }
 
 export interface AnalyzeResult {
@@ -115,8 +117,11 @@ export async function runAnalysis(deps: AnalyzeDeps, opts: AnalyzeOptions): Prom
   const market = repo.marketItems(opts.realm, now);
   if (market.length === 0) throw new AiError(`Keine Scan-Daten für ${opts.realm}. Erst im Spiel /wahp scan, dann den Companion laufen lassen.`);
   const existing = new Map(repo.assessments(opts.realm).map((a) => [a.itemId, a]));
-  const candidates = selectItems(market, existing, {
-    all: opts.all,
+  // --redo up,down: nur Items neu bewerten, deren letzte Bewertung so lautet
+  const redo = opts.redo?.length ? new Set(opts.redo) : null;
+  const pool = redo ? market.filter((i) => redo.has(existing.get(i.itemId)?.direction as never)) : market;
+  const candidates = selectItems(pool, existing, {
+    all: opts.all || redo !== null,
     limit: opts.limit,
     reassessHours: config.aiReassessHours,
     now,

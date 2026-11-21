@@ -370,6 +370,18 @@ describe("runAnalysis gegen nachgebaute Claude-API", () => {
     expect(researchCalls()).toHaveLength(0);
   });
 
+  test("--redo: nur Items mit dieser Richtung neu bewerten, auch wenn frisch", async () => {
+    const { deps } = setup();
+    await runAnalysis(deps, { realm: REALM });
+    calls.length = 0;
+    const later = { ...deps, now: () => NOW + HOUR };
+    // Pestblüte up, Lotus down, Gromsblut und Feuerschutztrank flat
+    expect((await runAnalysis(later, { realm: REALM, redo: ["up", "down"], dryRun: true })).candidates).toBe(2);
+    expect((await runAnalysis(later, { realm: REALM, redo: ["flat"], dryRun: true })).candidates).toBe(2);
+    const r = await runAnalysis(later, { realm: REALM, redo: ["down"] });
+    expect(r).toMatchObject({ candidates: 1, assessed: 1, newBrief: false });
+  });
+
   test("Probelauf fragt nichts an und schätzt die Kosten", async () => {
     const { deps } = setup();
     const r = await runAnalysis({ ...deps, client: () => { throw new Error("darf nicht aufgerufen werden"); } }, { realm: REALM, dryRun: true });

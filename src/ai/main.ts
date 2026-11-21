@@ -21,8 +21,16 @@ const { values } = parseArgs({
     all: { type: "boolean", default: false },
     "new-brief": { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
+    // z. B. --redo up,down: nur Items neu bewerten, deren letzte Bewertung so lautet
+    redo: { type: "string" },
   },
 });
+
+const redo = values.redo?.split(",").map((d) => d.trim()).filter(Boolean) ?? [];
+if (redo.some((d) => !["up", "down", "flat"].includes(d))) {
+  console.error("--redo erwartet up, down oder flat, z. B. --redo up,down");
+  process.exit(1);
+}
 
 const config = loadConfig();
 const knowledge = assertValidKnowledge(forever);
@@ -46,7 +54,7 @@ for (const realm of realms) {
   try {
     const r = await runAnalysis(
       { repo, knowledge, config, log, client: () => createClient(config) },
-      { realm, limit, all: values.all, newBrief: values["new-brief"], dryRun: values["dry-run"] },
+      { realm, limit, all: values.all, newBrief: values["new-brief"], dryRun: values["dry-run"], redo: redo as Array<"up" | "down" | "flat"> },
     );
     const cost = r.costUsd === null ? "unbekannt (Modell nicht in der Preistabelle)" : `~$${r.costUsd.toFixed(2)}`;
     if (values["dry-run"]) {
