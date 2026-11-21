@@ -3,7 +3,7 @@ import type { Config } from "../config.ts";
 import type { Repo } from "../db/repo.ts";
 import { isoDate } from "../engine/predict.ts";
 import type { Knowledge } from "../knowledge/types.ts";
-import { AiError, assessChunk, priceFor, research, UsageTally } from "./claude.ts";
+import { AiError, assessChunk, MAX_SEARCHES, priceFor, research, UsageTally } from "./claude.ts";
 import { assessSystem, itemsPrompt, RESEARCH_SYSTEM, researchPrompt } from "./prompts.ts";
 import { apiModel } from "./provider.ts";
 import type { Brief, MarketItem, StoredAssessment } from "./types.ts";
@@ -77,7 +77,9 @@ export function estimateCostUsd(
   if (!p) return null;
   const chunks = Math.ceil(itemCount / chunkSize);
   const prefix = (briefChars ?? 15_000) / 3.5 + 1_500; // System-Prompt + Lagebericht in Tokens
-  const research = briefChars === null ? (150_000 * p.input + 10_000 * p.output) / 1e6 + 20 * 0.01 : 0;
+  // Gemessen am 2026-11-21: ungecacht und ohne Suchlimit kostete eine Recherche $5.88.
+  // Mit Cache und höchstens MAX_SEARCHES Suchen konservativ ~50k Tokens pro Suche.
+  const research = briefChars === null ? (MAX_SEARCHES * 50_000 * p.input + 20_000 * p.output) / 1e6 + MAX_SEARCHES * 0.01 : 0;
   const input = itemCount * 40 + chunks * 150;
   const output = itemCount * 110 + chunks * 2_000; // JSON + Nachdenken
   const cache = chunks > 0 ? prefix * p.input * 1.25 + (chunks - 1) * prefix * p.cacheRead : 0;
@@ -162,6 +164,8 @@ export async function runAnalysis(deps: AnalyzeDeps, opts: AnalyzeOptions): Prom
       system: RESEARCH_SYSTEM,
       prompt: researchPrompt(today, deps.knowledge, focus),
       usage,
+      budgetUsd: config.aiBudgetUsd,
+      costUsd: cost,
     });
     brief = repo.saveBrief(now, config.aiModel, r.content, r.sources);
     log(`Lagebericht #${brief.id}: ${r.content.length} Zeichen, ${r.sources.length} Quellen, ${usage.webSearches} Suchen`);

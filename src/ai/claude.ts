@@ -12,7 +12,10 @@ import { AssessmentBatchSchema, sanitizeAssessment, type Assessment, type Source
 
 /** Lehnt das Modell ab, springt serverseitig ein passendes Ersatzmodell ein. */
 const FALLBACK_BETA = "server-side-fallback-2026-07-01";
-const MAX_CONTINUATIONS = 6;
+const MAX_CONTINUATIONS = 4;
+/** Suchen und Abrufe pro Recherche-Lauf (nicht pro Anfrage, Fortsetzungen zählen mit) */
+export const MAX_SEARCHES = 10;
+const MAX_FETCHES = 5;
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -165,21 +168,32 @@ export async function research(
     prompt: string;
     usage: UsageTally;
     maxSearches?: number;
+    /** Bricht vor der nächsten Fortsetzung ab, wenn die Kosten darüber liegen */
+    budgetUsd?: number;
+    costUsd?: () => number | null;
   },
 ): Promise<ResearchResult> {
   const messages: BetaMessageParam[] = [{ role: "user", content: opts.prompt }];
   const blocks: BetaContentBlock[] = [];
-  const tools: BetaToolUnion[] = [{ type: "web_search_20260209", name: "web_search", max_uses: opts.maxSearches ?? 20 }];
-  // OpenRouter reicht die Websuche im Anthropic-Format durch, Web-Fetch nicht
-  if (opts.provider === "anthropic") tools.push({ type: "web_fetch_20260209", name: "web_fetch", max_uses: 10 });
+  const maxSearches = opts.maxSearches ?? MAX_SEARCHES;
+  let searches = 0;
+  let fetches = 0;
 
   for (let turn = 0; ; turn++) {
     if (turn >= MAX_CONTINUATIONS) throw new AiError("Recherche: zu viele Fortsetzungen, Abbruch");
+    // max_uses gilt pro Anfrage, deshalb bei jeder Fortsetzung nur noch den Rest erlauben
+    const tools: BetaToolUnion[] = [{ type: "web_search_20260209", name: "web_search", max_uses: Math.max(1, maxSearches - searches) }];
+    // OpenRouter reicht die Websuche im Anthropic-Format durch, Web-Fetch nicht
+    if (opts.provider === "anthropic") {
+      tools.push({ type: "web_fetch_20260209", name: "web_fetch", max_uses: Math.max(1, MAX_FETCHES - fetches) });
+    }
     const msg = await client.beta.messages
       .stream({
         model: opts.model,
         max_tokens: 64_000,
         ...providerParams(opts.provider),
+        // Fortsetzungen schicken alle Suchergebnisse nochmal mit: aus dem Cache kosten sie ein Zehntel
+        cache_control: { type: "ephemeral" },
         thinking: { type: "adaptive" },
         output_config: { effort: opts.effort },
         system: opts.system,
@@ -188,9 +202,15 @@ export async function research(
       })
       .finalMessage();
     opts.usage.add(msg.usage);
+    searches += msg.usage.server_tool_use?.web_search_requests ?? 0;
+    fetches += msg.usage.server_tool_use?.web_fetch_requests ?? 0;
     checkStop(msg, "Recherche");
     blocks.push(...msg.content);
     if (msg.stop_reason === "pause_turn") {
+      const cost = opts.costUsd?.() ?? null;
+      if (opts.budgetUsd !== undefined && cost !== null && cost >= opts.budgetUsd) {
+        throw new AiError(`Recherche: Budget von $${opts.budgetUsd} erreicht (~$${cost.toFixed(2)} nach ${searches} Suchen), Abbruch`);
+      }
       messages.push({ role: "assistant", content: msg.content });
       continue;
     }

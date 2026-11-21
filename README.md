@@ -133,9 +133,11 @@ Ein Lauf hat zwei Schritte:
 Danach wird nur neu bewertet, was fällig ist: neue Items, Bewertungen älter als
 `AI_REASSESS_HOURS` (72 h) oder Preissprünge über 25 %.
 
-**Kosten:** Standard ist Claude Opus 5.5 (`AI_MODEL`). Grob 4 bis 5 $ pro 1000 Items plus etwa
-1 $ für die Recherche. `--dry-run` schätzt vorher. `AI_BUDGET_USD` (10 $) bricht einen Lauf ab,
-der Rest kommt beim nächsten Mal dran. Günstiger geht es mit `AI_MODEL=claude-sonnet-5-5` (etwa
+**Kosten:** Standard ist Claude Opus 5.5 (`AI_MODEL`). Grob 3,50 $ pro 1000 Items plus bis etwa
+2,50 $ für die Recherche (höchstens 10 Websuchen, einmal pro Tag). `--dry-run` schätzt vorher.
+`AI_BUDGET_USD` (10 $) gilt für den ganzen Lauf, Recherche eingeschlossen: Wird es erreicht, setzt
+die Recherche nicht mehr fort, und es startet kein weiterer Bewertungsblock. Der Rest kommt beim
+nächsten Mal dran. Lehrgeld vom 2026-11-21: Ohne Cache und Suchlimit kostete eine Recherche 5,88 $. Günstiger geht es mit `AI_MODEL=claude-sonnet-5-5` (etwa
 die Hälfte) oder `claude-haiku-5-5` (Bruchteil, aber schwächer im Abwägen).
 
 Automatisch: `AI_INTERVAL_HOURS=24` lässt den Server selbst analysieren. Lehnt das Modell eine

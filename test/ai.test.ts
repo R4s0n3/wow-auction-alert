@@ -322,6 +322,9 @@ describe("runAnalysis gegen nachgebaute Claude-API", () => {
     expect(rc[0]!.body.stream).toBe(true);
     expect(rc[0]!.body.tools.map((t: any) => t.type)).toEqual(["web_search_20260209", "web_fetch_20260209"]);
     expect(rc[1]!.body.messages[1].role).toBe("assistant");
+    // Cache über Fortsetzungen, Suchlimit pro Lauf: nach 3 Suchen bleiben 7
+    expect(rc[0]!.body.cache_control).toEqual({ type: "ephemeral" });
+    expect(rc.map((c) => c.body.tools[0].max_uses)).toEqual([10, 7]);
     expect(rc[0]!.body.messages[0].content).toContain("Pestblüte"); // umsatzstarke Items als Fokus
 
     const brief = repo.latestBrief()!;
@@ -372,11 +375,22 @@ describe("runAnalysis gegen nachgebaute Claude-API", () => {
     expect(estimateCostUsd("unbekanntes-modell", 10, 40, null)).toBeNull();
   });
 
-  test("Budget erreicht: es wird nichts mehr bewertet", async () => {
-    const { deps, logs } = setup({ aiBudgetUsd: 0.0001 });
-    const r = await runAnalysis(deps, { realm: REALM });
-    expect(r).toMatchObject({ assessed: 0, budgetHit: true });
+  test("Budget erreicht in der Recherche: keine weitere Fortsetzung, keine Bewertung", async () => {
+    const { deps, repo } = setup({ aiBudgetUsd: 0.0001 });
+    expect(runAnalysis(deps, { realm: REALM })).rejects.toThrow("Recherche: Budget von $0.0001 erreicht");
+    await Bun.sleep(10);
+    expect(researchCalls()).toHaveLength(1); // nach der ersten Pause Schluss
     expect(assessCalls()).toHaveLength(0);
+    expect(repo.latestBrief()).toBeNull();
+  });
+
+  test("Budget erreicht bei der Bewertung: es wird nichts mehr bewertet", async () => {
+    const { deps, logs } = setup();
+    await runAnalysis(deps, { realm: REALM, limit: 0 }); // nur Bericht
+    calls.length = 0;
+    const r = await runAnalysis({ ...deps, config: { ...deps.config, aiBudgetUsd: 0.0001 }, now: () => NOW + HOUR }, { realm: REALM });
+    expect(r.newBrief).toBe(false);
+    expect(r).toMatchObject({ candidates: 4, assessed: 3, budgetHit: true }); // erster Block (3 Items) läuft fertig, der zweite nicht mehr
     expect(logs.some((l) => l.includes("Budget"))).toBe(true);
   });
 
