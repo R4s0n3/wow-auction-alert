@@ -4,6 +4,8 @@ export interface Config {
   ingestToken: string;
   /** Leer = alle GET-Routen offen. Gesetzt = Lesen nur mit READ_TOKEN oder INGEST_TOKEN (fürs Netz) */
   readToken: string;
+  /** Öffentliche Adresse der Website, z. B. https://wahp.app.miomideal.com (für Links in Discord) */
+  publicUrl: string;
   discordWebhookUrl: string;
   engineIntervalMin: number;
   defaultRealm: string;
@@ -67,6 +69,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     dbPath: env.DB_PATH || "data/wahp.sqlite",
     ingestToken: env.INGEST_TOKEN ?? "",
     readToken: env.READ_TOKEN ?? "",
+    publicUrl: (env.PUBLIC_URL ?? "").replace(/\/+$/, ""),
     discordWebhookUrl: env.DISCORD_WEBHOOK_URL ?? "",
     engineIntervalMin: num(env.ENGINE_INTERVAL_MIN, 15),
     defaultRealm: env.DEFAULT_REALM || "eu",

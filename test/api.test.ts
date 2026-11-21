@@ -4,7 +4,7 @@ import { loadConfig } from "../src/config.ts";
 import { openDatabase } from "../src/db/database.ts";
 import { Repo } from "../src/db/repo.ts";
 import { runEngine } from "../src/engine/run.ts";
-import { alertLine, discordMessages, dots, sendDiscord, shortGold } from "../src/live/discord.ts";
+import { discordMessages, dots, itemLines, sendDiscord, shortGold } from "../src/live/discord.ts";
 import type { Alert } from "../src/db/repo.ts";
 import type { Prediction } from "../src/engine/predict.ts";
 import { LiveHub } from "../src/live/hub.ts";
@@ -20,6 +20,8 @@ function makeContext(): AppContext {
     config: loadConfig({ INGEST_TOKEN: TOKEN, DEFAULT_REALM: "eu" }),
     hub: new LiveHub(),
     now: () => NOW,
+    // Keine echten Anfragen an Wowhead aus den Tests
+    iconFetch: (async () => new Response(null, { status: 404 })) as unknown as typeof fetch,
   };
 }
 
@@ -152,21 +154,28 @@ describe("Engine + Live", () => {
 });
 
 describe("Startseite", () => {
-  test("ohne READ_TOKEN: Überblick mit Realm, Links ohne Token", async () => {
+  test("ohne READ_TOKEN: Karten mit Wowhead-Link, Icon sobald bekannt, Verkaufen-Tab zuerst", async () => {
     ctx = makeContext();
     await postScan(scan(3000));
     const res = await fetch(url("/"));
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
-    const html = await res.text();
-    expect(html).toContain("AH-Prognose-Server läuft");
-    expect(html).toContain("<td>eu</td>");
-    expect(html).toContain('href="/predictions?realm=eu"');
-    expect(html).toContain("Noch keiner"); // kein Lagebericht
-    // Listen für den Realm mit dem neuesten Scan: vor dem Raid nur Kaufen
-    expect(html).toContain("Lohnt sich jetzt zu verkaufen · eu");
-    expect(html.split("Jetzt kaufen · eu")[0]).toContain("Gerade nichts.");
-    expect(html.split("Jetzt kaufen · eu")[1]).toMatch(/<td>Pestblüte<\/td><td>📈 \+\d+ %<\/td>/);
+    let html = await res.text();
+    expect(html).toContain("<h1><span class=\"live\"></span>AH-Prognose</h1>");
+    expect(html).toContain("🌍 <b>eu</b>");
+    expect(html.indexOf('data-panel="sell"')).toBeLessThan(html.indexOf('data-panel="buy"'));
+    const sell = html.split('id="sell"')[1]!.split('id="buy"')[0]!;
+    expect(sell).toContain("Gerade nichts."); // vor dem Raid nur Kaufen
+    const buy = html.split('id="buy"')[1]!;
+    expect(buy).toContain('<article class="card buy" data-name="pestblüte">');
+    expect(buy).toContain('href="https://www.wowhead.com/forever/de/item=4"');
+    expect(buy).toContain('<span class="icon none">P</span>'); // noch kein Icon
+    expect(buy).toMatch(/<span class="badge">\+\d+ %<\/span>/);
+    expect(html).toContain("wow.zamimg.com/js/tooltips.js");
+
+    ctx.repo.setIcon(4, "inv_misc_herb_17", 1, null, NOW);
+    html = await (await fetch(url("/"))).text();
+    expect(html).toContain('src="https://wow.zamimg.com/images/wow/icons/large/inv_misc_herb_17.jpg"');
     expect((await fetch(url("/favicon.ico"))).status).toBe(204);
   });
 
@@ -175,12 +184,11 @@ describe("Startseite", () => {
     await postScan(scan(3000));
     const locked = await (await fetch(url("/"))).text();
     expect(locked).toContain('name="token"');
-    expect(locked).not.toContain("<td>eu</td>");
+    expect(locked).not.toContain("pestblüte");
     expect(await (await fetch(url("/?token=falsch"))).text()).toContain("Der Token stimmt nicht");
 
     const open = await (await fetch(url(`/?token=${encodeURIComponent("le<s>en")}`))).text();
-    expect(open).toContain("<td>eu</td>");
-    expect(open).toContain(`href="/predictions?realm=eu&amp;token=le%3Cs%3Een"`);
+    expect(open).toContain('data-name="pestblüte"');
     expect(open).not.toContain("le<s>en");
   });
 });
@@ -215,55 +223,50 @@ describe("Discord", () => {
   });
   const alertOf = (p: Prediction, realm = p.realm): Alert => ({ id: 1, ts: NOW, realm, itemId: p.itemId, eventId: p.eventId, action: p.action, previousAction: null, prediction: { ...p, realm } });
 
-  test("eine Karte pro Aktion, eine kurze Zeile pro Item", () => {
+  test("eine Karte pro Item: Wowhead-Link, Icon, zwei kurze Zeilen, Zähler im Footer", () => {
     const { alerts } = runEngine(ctx, NOW);
-    const [msg, ...rest] = discordMessages(alerts);
+    const icons = new Map([[4, "inv_misc_herb_17"]]);
+    const [msg, ...rest] = discordMessages(alerts, { icons, publicUrl: "https://wahp.example.com/" });
     expect(rest).toHaveLength(0); // ein Realm, eine Nachricht
-    const buy = msg!.embeds[0]!;
-    expect(buy.title).toMatch(/^🟢 KAUFEN · \d+$/);
-    expect(buy.color).toBe(0x2ecc71);
-    const lines = buy.description.split("\n");
-    expect(lines[0]).toStartWith("🗓️ "); // gemeinsamer Anlass einmal oben
-    const pest = lines.find((l) => l.startsWith("**Pestblüte**"))!;
-    expect(pest).toMatch(/^\*\*Pestblüte\*\* · 📈 \+\d+ %( · \S+ → \S+)? · ⏳ 05\.12\. · [●○]{5}$/); // Preis nur mit Scan
-    expect(buy.footer.text).toBe("eu · ⏳ kaufen bis · ●●●○○ Sicherheit");
-    expect(msg!.embeds.at(-1)!.timestamp).toBe(new Date(NOW).toISOString());
-    expect(buy.description).not.toContain("Warum");
+    expect(msg!.embeds[0]!.author!.name).toMatch(/^🟢 KAUFEN · \d+$/);
+    const pest = msg!.embeds.find((e) => e.title === "Pestblüte")!;
+    expect(pest).toMatchObject({ url: "https://www.wowhead.com/forever/de/item=4", color: 0x2ecc71, thumbnail: { url: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_herb_17.jpg" } });
+    const [first, second] = pest.description.split("\n");
+    expect(first).toMatch(/^📈 \*\*\+\d+ %\*\*/);
+    expect(second).toMatch(/^⏳ 05\.12\. · [●○]{5}$/);
+    expect(msg!.embeds.filter((e) => e.thumbnail)).toHaveLength(1); // nur wo ein Icon bekannt ist
+    const last = msg!.embeds.at(-1)!;
+    expect(last.timestamp).toBe(new Date(NOW).toISOString());
+    const hidden = alerts.length - msg!.embeds.length;
+    expect(last.footer!.text).toBe(`eu · ${hidden > 0 ? `+${hidden} weitere auf wahp.example.com · ` : ""}●●●○○ Sicherheit`);
+    expect(msg!.embeds.every((e) => !e.description.includes("Warum"))).toBe(true);
   });
 
-  test("KI: fallender Preis, Peak-Verkauf, Kurzformen", () => {
-    expect(alertLine(ai())).toBe("**Schwarzer Lotus** · 📉 −30 % · 95g → 66g 50s · ⏳ 05.12. · ●●●●○ 🤖");
-    expect(alertLine(ai({ sellTo: null, currentPrice: null }))).toBe("**Schwarzer Lotus** · 📉 −30 % · ⏳ jetzt · ●●●●○ 🤖");
-    expect(alertLine(ai({ source: "rules", impact: 0.6, currentPrice: 22_000, sellTo: "2026-12-19", confidence: 0.1 }))).toBe(
-      "**Schwarzer Lotus** · 💰 Peak · 2g 20s · ⏳ 19.12. · ●○○○○",
-    );
+  test("Zeilen: fallender Preis, ohne Preis, Peak-Verkauf, Kurzformen", () => {
+    expect(itemLines(ai())).toEqual(["📉 **−30 %** · 95g → 66g 50s", "⏳ 05.12. · ●●●●○ 🤖"]);
+    expect(itemLines(ai({ sellTo: null, currentPrice: null }))).toEqual(["📉 **−30 %**", "⏳ jetzt · ●●●●○ 🤖"]);
+    expect(itemLines(ai({ source: "rules", impact: 0.6, currentPrice: 22_000, sellTo: "2026-12-19", confidence: 0.1 }))).toEqual(["💰 **Peak** · 2g 20s", "⏳ 19.12. · ●○○○○"]);
     expect([1_234_567, 10_000, 4_000, 35].map(shortGold)).toEqual(["123g", "1g", "40s", "35c"]);
     expect(dots(0)).toBe("●○○○○");
     expect(dots(1)).toBe("●●●●●");
-
-    const [msg] = discordMessages([alertOf(ai())]);
-    expect(msg!.embeds).toHaveLength(1);
-    expect(msg!.embeds[0]).toMatchObject({ title: "🔴 VERKAUFEN · 1", color: 0xe74c3c });
-    expect(msg!.embeds[0]!.footer.text).toBe("eu-alliance · ⏳ verkaufen bis · ●●●○○ Sicherheit · 🤖 KI");
   });
 
-  test("höchstens 10 Zeilen, stärkste zuerst, der Rest als Zähler", () => {
-    const many = Array.from({ length: 14 }, (_, i) => alertOf(ai({ itemId: i + 1, itemName: `Item ${i + 1}`, eventName: `Treiber ${i}`, impact: -0.05 * (i + 1) })));
-    const lines = discordMessages(many)[0]!.embeds[0]!.description.split("\n");
-    expect(lines).toHaveLength(11); // verschiedene Treiber: keine Anlass-Zeile
-    expect(lines[0]).toStartWith("**Item 14**");
-    expect(lines.at(-1)).toBe("➕ 4 weitere · im Spiel `/wahp list`");
+  test("Verkaufen zuerst: höchstens 6 Verkaufs- und 4 Kaufkarten, nach Gold sortiert", () => {
+    const sells = Array.from({ length: 9 }, (_, i) => alertOf(ai({ itemId: 100 + i, itemName: `Verkauf ${i}`, currentPrice: 10_000 * (i + 1) })));
+    const buys = Array.from({ length: 5 }, (_, i) => alertOf(ai({ action: "buy", itemId: 200 + i, itemName: `Kauf ${i}`, impact: 0.5, netUpside: 0.4, buyUntil: "2026-12-05" })));
+    const [msg] = discordMessages([...buys, ...sells]);
+    expect(msg!.embeds).toHaveLength(10);
+    expect(msg!.embeds.map((e) => e.title).slice(0, 6)).toEqual(["Verkauf 8", "Verkauf 7", "Verkauf 6", "Verkauf 5", "Verkauf 4", "Verkauf 3"]);
+    expect(msg!.embeds[0]!.author!.name).toBe("🔴 VERKAUFEN · 9");
+    expect(msg!.embeds[6]!.author!.name).toBe("🟢 KAUFEN · 5");
+    expect(msg!.embeds[6]!.color).toBe(0x2ecc71);
+    expect(msg!.embeds.at(-1)!.footer!.text).toBe("eu-alliance · +4 weitere · ●●●○○ Sicherheit");
   });
 
   test("sortiert nach Gold pro Stück: Lotus mit -30 % vor der Kiste für 97c mit -70 %", () => {
     const crate = ai({ itemId: 3, itemName: "Abgefangene Kiste", impact: -0.7, currentPrice: 97, expectedPeakPrice: 29, confidence: 0.65, eventName: "x" });
-    const lines = discordMessages([alertOf(crate), alertOf(ai())])[0]!.embeds[0]!.description.split("\n");
-    expect(lines.map((l) => l.split(" · ")[0])).toEqual(["**Schwarzer Lotus**", "**Abgefangene Kiste**"]);
-  });
-
-  test("Verkaufen-Karte steht vor der Kaufen-Karte", () => {
-    const [msg] = discordMessages([alertOf(ai({ action: "buy", itemId: 2, itemName: "Pestblüte", impact: 0.5, netUpside: 0.4, buyUntil: "2026-12-05" })), alertOf(ai())]);
-    expect(msg!.embeds.map((e) => e.title)).toEqual(["🔴 VERKAUFEN · 1", "🟢 KAUFEN · 1"]);
+    const [msg] = discordMessages([alertOf(crate), alertOf(ai())]);
+    expect(msg!.embeds.map((e) => e.title)).toEqual(["Schwarzer Lotus", "Abgefangene Kiste"]);
   });
 
   test("schickt Embeds ohne Erwähnungen, eine Nachricht pro Realm", async () => {

@@ -76,6 +76,41 @@ export class Repo {
     return items.length;
   }
 
+  /** Icon (Wowhead-Name) und Qualität pro Item, soweit bekannt */
+  itemMeta(itemIds: number[]): Map<number, { icon: string | null; quality: number | null }> {
+    const out = new Map<number, { icon: string | null; quality: number | null }>();
+    const stmt = this.db.query(`SELECT icon, quality FROM items WHERE item_id = $itemId`);
+    for (const itemId of itemIds) {
+      const row = stmt.get({ itemId }) as { icon: string | null; quality: number | null } | null;
+      if (row) out.set(itemId, row);
+    }
+    return out;
+  }
+
+  /** Items ohne Icon, die noch nie oder vor `checkedBefore` nachgeschlagen wurden */
+  missingIcons(itemIds: number[], checkedBefore: number): number[] {
+    const stmt = this.db.query(`SELECT icon, icon_checked_at AS checked FROM items WHERE item_id = $itemId`);
+    return itemIds.filter((itemId) => {
+      const row = stmt.get({ itemId }) as { icon: string | null; checked: number | null } | null;
+      return !row || (!row.icon && (row.checked === null || row.checked < checkedBefore));
+    });
+  }
+
+  /** Ergebnis der Wowhead-Abfrage. Name und Qualität aus dem Spiel haben Vorrang. */
+  setIcon(itemId: number, icon: string | null, quality: number | null, name: string | null, ts: number): void {
+    this.db
+      .query(
+        `INSERT INTO items (item_id, name, quality, icon, icon_checked_at, updated_at)
+         VALUES ($itemId, $name, $quality, $icon, $ts, $ts)
+         ON CONFLICT (item_id) DO UPDATE SET
+           icon = COALESCE(excluded.icon, icon),
+           icon_checked_at = excluded.icon_checked_at,
+           name = COALESCE(name, excluded.name),
+           quality = COALESCE(quality, excluded.quality)`,
+      )
+      .run({ itemId, name, quality, icon, ts });
+  }
+
   itemNames(itemIds: number[]): Map<number, string> {
     const out = new Map<number, string>();
     const stmt = this.db.query(`SELECT name FROM items WHERE item_id = $itemId AND name IS NOT NULL`);

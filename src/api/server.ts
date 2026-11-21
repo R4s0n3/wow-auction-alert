@@ -17,6 +17,8 @@ export interface AppContext {
   now?: () => number;
   /** Wird nach jedem Scan-Upload aufgerufen, damit Alerts sofort rausgehen */
   onScan?: () => void | Promise<void>;
+  /** Für die Icon-Abfrage bei Wowhead (Tests setzen hier eine Attrappe ein) */
+  iconFetch?: typeof fetch;
 }
 
 const REALM_RE = /^[a-z0-9][a-z0-9-]{0,63}$/i;

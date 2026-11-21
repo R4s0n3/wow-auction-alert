@@ -37,11 +37,15 @@ export function predictionsFor(deps: EngineDeps, realm: string, now: number): Pr
  * Ein Engine-Durchlauf: Prognosen für alle aktiven Realms berechnen, loggen und
  * neue Alerts erzeugen, wenn eine Empfehlung auf "kaufen" oder "verkaufen" springt.
  */
-export function runEngine(deps: EngineDeps, now = Date.now()): { predictions: number; alerts: Alert[] } {
+export function runEngine(
+  deps: EngineDeps,
+  now = Date.now(),
+): { predictions: number; alerts: Alert[]; /** Items mit Kauf- oder Verkaufssignal, z. B. für Icons */ signalItemIds: number[] } {
   const realms = new Set(deps.repo.realms(now - 7 * DAY_MS));
   realms.add(deps.config.defaultRealm);
 
   const alerts: Alert[] = [];
+  const signals = new Set<number>();
   let count = 0;
   deps.repo.transaction(() => {
     for (const realm of realms) {
@@ -49,6 +53,7 @@ export function runEngine(deps: EngineDeps, now = Date.now()): { predictions: nu
       count += predictions.length;
       deps.repo.logPredictions(now, predictions);
       for (const p of predictions) {
+        if (ALERT_ACTIONS.has(p.action)) signals.add(p.itemId);
         const previous = deps.repo.getAction(realm, p.itemId, p.eventId);
         if (previous === p.action) continue;
         deps.repo.setAction(realm, p.itemId, p.eventId, p.action, now);
@@ -56,5 +61,5 @@ export function runEngine(deps: EngineDeps, now = Date.now()): { predictions: nu
       }
     }
   });
-  return { predictions: count, alerts };
+  return { predictions: count, alerts, signalItemIds: [...signals] };
 }

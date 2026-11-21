@@ -58,7 +58,10 @@ CREATE TABLE IF NOT EXISTS items (
   name       TEXT,
   quality    INTEGER,
   category   TEXT,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  -- Icon-Name von Wowhead (z. B. inv_misc_herb_plaguebloom), für Discord und Website
+  icon            TEXT,
+  icon_checked_at INTEGER
 );
 
 -- Lagebericht der KI-Recherche (Websuche), Grundlage für alle Item-Bewertungen
@@ -96,5 +99,9 @@ export function openDatabase(path: string): Database {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA busy_timeout = 5000;");
   db.exec(SCHEMA);
+  // Spalten, die nach dem ersten Release dazugekommen sind
+  const itemColumns = new Set((db.query("PRAGMA table_info(items)").all() as Array<{ name: string }>).map((c) => c.name));
+  if (!itemColumns.has("icon")) db.exec("ALTER TABLE items ADD COLUMN icon TEXT");
+  if (!itemColumns.has("icon_checked_at")) db.exec("ALTER TABLE items ADD COLUMN icon_checked_at INTEGER");
   return db;
 }

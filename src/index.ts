@@ -1,6 +1,7 @@
 import { forever } from "../knowledge/forever/index.ts";
 import { runAnalysis } from "./ai/analyze.ts";
 import { createClient } from "./ai/provider.ts";
+import { iconsFor, resolveIcons } from "./icons.ts";
 import { startServer } from "./api/server.ts";
 import { loadConfig } from "./config.ts";
 import { openDatabase } from "./db/database.ts";
@@ -15,14 +16,35 @@ const knowledge = assertValidKnowledge(forever);
 const repo = new Repo(openDatabase(config.dbPath));
 const hub = new LiveHub();
 
+// Icons für alle Items mit Signal nach und nach im Hintergrund holen (Wowhead schonen)
+let fetchingIcons = false;
+async function warmIcons(itemIds: number[]): Promise<void> {
+  if (fetchingIcons || itemIds.length === 0) return;
+  fetchingIcons = true;
+  try {
+    const found = await resolveIcons(repo, itemIds, { max: 300 });
+    if (found > 0) console.log(`[icons] ${found} Icons von Wowhead geholt`);
+  } catch (err) {
+    console.warn("[icons] fehlgeschlagen:", err instanceof Error ? err.message : err);
+  } finally {
+    fetchingIcons = false;
+  }
+}
+
 async function tick(): Promise<void> {
   try {
-    const { predictions, alerts } = runEngine({ repo, knowledge, config });
+    const { predictions, alerts, signalItemIds } = runEngine({ repo, knowledge, config });
     if (alerts.length > 0) {
       hub.broadcast(alerts);
-      if (config.discordWebhookUrl) await sendDiscord(config.discordWebhookUrl, alerts);
+      if (config.discordWebhookUrl) {
+        // Die Icons der Items, die gleich in Discord landen, vorher holen (höchstens ~20 s)
+        const ids = alerts.map((a) => a.itemId);
+        await Promise.race([resolveIcons(repo, ids, { max: 60, concurrency: 6 }), Bun.sleep(20_000)]).catch(() => {});
+        await sendDiscord(config.discordWebhookUrl, alerts, fetch, undefined, { icons: iconsFor(repo, ids), publicUrl: config.publicUrl });
+      }
     }
     console.log(`[engine] ${predictions} Prognosen, ${alerts.length} neue Alerts`);
+    void warmIcons(signalItemIds);
   } catch (err) {
     console.error("[engine] Durchlauf fehlgeschlagen:", err);
   }

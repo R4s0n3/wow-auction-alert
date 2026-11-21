@@ -1,27 +1,37 @@
 import type { Alert } from "../db/repo.ts";
-import type { Action, Prediction } from "../engine/predict.ts";
+import type { Prediction } from "../engine/predict.ts";
 import { byWorth } from "../engine/rank.ts";
+import { iconUrl, wowheadUrl } from "../icons.ts";
 
-// Eine Nachricht pro Realm und Durchlauf, darin eine Karte (Embed) pro Aktion,
-// pro Item eine Zeile mit Symbolen statt Sätzen. Die Begründung steht im Spiel
-// im Tooltip (Shift), hier nur das, was man zum Handeln braucht.
+// Eine Nachricht pro Realm und Durchlauf. Darin eine Karte pro Item, mit Icon als
+// Vorschaubild und dem Namen als Wowhead-Link. Pro Karte zwei kurze Zeilen mit
+// Symbolen: was passiert, Preis jetzt → Ziel, bis wann, wie sicher. Verkaufen zuerst.
+// Die Begründung steht im Spiel im Tooltip und auf der Website.
 
-const MAX_LINES = 10;
-// Verkaufen zuerst: was man jetzt loswerden sollte, ist für die meisten wichtiger
-const CARDS: Array<{ action: Action; title: string; color: number; deadline: string }> = [
-  { action: "sell", title: "🔴 VERKAUFEN", color: 0xe74c3c, deadline: "verkaufen bis" },
-  { action: "buy", title: "🟢 KAUFEN", color: 0x2ecc71, deadline: "kaufen bis" },
-];
+const MAX_EMBEDS = 10; // Discord-Limit pro Nachricht
+const MAX_SELLS = 6;
+const MAX_BUYS_WITH_SELLS = 4;
+const RED = 0xe74c3c;
+const GREEN = 0x2ecc71;
 
 interface Embed {
+  author?: { name: string };
   title: string;
+  url?: string;
   description: string;
   color: number;
-  footer: { text: string };
+  thumbnail?: { url: string };
+  footer?: { text: string };
   timestamp?: string;
 }
 export interface DiscordMessage {
   embeds: Embed[];
+}
+export interface DiscordExtras {
+  /** Wowhead-Icon-Namen pro Item */
+  icons?: Map<number, string>;
+  /** Adresse der Website für den Hinweis auf weitere Signale */
+  publicUrl?: string;
 }
 
 /** Kurz und ohne Kupfer: 123g · 1g 20s · 40s · 35c */
@@ -49,55 +59,61 @@ export function dots(confidence: number): string {
   return "●".repeat(n) + "○".repeat(5 - n);
 }
 
-/** Pestblüte · 📈 +50 % · 40s → 60s · ⏳ 05.12. · ●●●○○ */
-export function alertLine(p: Prediction): string {
-  const parts = [`**${p.itemName}**`];
-  const prices = p.currentPrice !== null && p.expectedPeakPrice !== null ? `${shortGold(p.currentPrice)} → ${shortGold(p.expectedPeakPrice)}` : null;
+/** Zwei Zeilen pro Item: "📉 **−30 %** · 95g → 66g 50s" und "⏳ 05.12. · ●●●●○ 🤖" */
+export function itemLines(p: Prediction): [string, string] {
+  const prices = p.currentPrice !== null && p.expectedPeakPrice !== null ? ` · ${shortGold(p.currentPrice)} → ${shortGold(p.expectedPeakPrice)}` : "";
+  let first: string;
+  let deadline: string | null;
   if (p.action === "buy") {
-    parts.push(`📈 ${pct(p.netUpside)}`);
-    if (prices) parts.push(prices);
-    if (p.buyUntil) parts.push(`⏳ ${shortDate(p.buyUntil)}`);
+    first = `📈 **${pct(p.netUpside)}**${prices}`;
+    deadline = p.buyUntil ? shortDate(p.buyUntil) : null;
   } else if (p.impact < 0) {
     // Preis wird fallen: vorher loswerden
-    parts.push(`📉 ${pct(p.impact)}`);
-    if (prices) parts.push(prices);
-    parts.push(`⏳ ${p.sellTo ? shortDate(p.sellTo) : "jetzt"}`);
+    first = `📉 **${pct(p.impact)}**${prices}`;
+    deadline = p.sellTo ? shortDate(p.sellTo) : "jetzt";
   } else {
     // Peak ist da: jetzt teuer verkaufen
-    parts.push("💰 Peak");
-    if (p.currentPrice !== null) parts.push(shortGold(p.currentPrice));
-    if (p.sellTo) parts.push(`⏳ ${shortDate(p.sellTo)}`);
+    first = `💰 **Peak**${p.currentPrice !== null ? ` · ${shortGold(p.currentPrice)}` : ""}`;
+    deadline = p.sellTo ? shortDate(p.sellTo) : null;
   }
-  parts.push(dots(p.confidence) + (p.source === "ai" ? " 🤖" : ""));
-  return parts.join(" · ");
+  const second = [deadline ? `⏳ ${deadline}` : null, dots(p.confidence) + (p.source === "ai" ? " 🤖" : "")].filter(Boolean).join(" · ");
+  return [first, second];
 }
 
+function card(p: Prediction, extras: DiscordExtras, header?: string): Embed {
+  const icon = extras.icons?.get(p.itemId);
+  return {
+    ...(header ? { author: { name: header } } : {}),
+    title: p.itemName.slice(0, 256),
+    url: wowheadUrl(p.itemId),
+    description: itemLines(p).join("\n"),
+    color: p.action === "buy" ? GREEN : RED,
+    ...(icon ? { thumbnail: { url: iconUrl(icon, "large") } } : {}),
+  };
+}
 
-export function discordMessages(alerts: Alert[]): DiscordMessage[] {
+export function discordMessages(alerts: Alert[], extras: DiscordExtras = {}): DiscordMessage[] {
   const realms = new Map<string, Alert[]>();
   for (const a of alerts) realms.set(a.realm, [...(realms.get(a.realm) ?? []), a]);
 
   const messages: DiscordMessage[] = [];
   for (const [realm, list] of realms) {
-    const embeds: Embed[] = [];
-    for (const card of CARDS) {
-      const group = list.map((a) => a.prediction).filter((p) => p.action === card.action);
-      if (group.length === 0) continue;
-      // Nach Gold pro Stück, nicht nach Prozent: -30 % auf 95g schlagen -70 % auf 97c
-      group.sort(byWorth);
-      const lines: string[] = [];
-      // Haben alle denselben Anlass (typisch bei den Handregeln), steht er einmal oben
-      if (new Set(group.map((p) => p.eventName)).size === 1) {
-        const p = group[0]!;
-        lines.push(`🗓️ ${p.eventName.split(" (")[0]}${p.eventDate ? ` · ${shortDate(p.eventDate)}` : ""}`);
-      }
-      lines.push(...group.slice(0, MAX_LINES).map(alertLine));
-      if (group.length > MAX_LINES) lines.push(`➕ ${group.length - MAX_LINES} weitere · im Spiel \`/wahp list\``);
-      const legend = [realm, `⏳ ${card.deadline}`, "●●●○○ Sicherheit", ...(group.some((p) => p.source === "ai") ? ["🤖 KI"] : [])];
-      embeds.push({ title: `${card.title} · ${group.length}`, description: lines.join("\n"), color: card.color, footer: { text: legend.join(" · ") } });
-    }
-    if (embeds.length === 0) continue;
-    embeds[embeds.length - 1]!.timestamp = new Date(Math.max(...list.map((a) => a.ts))).toISOString();
+    // Nach Gold pro Stück, nicht nach Prozent: -30 % auf 95g schlagen -70 % auf 97c
+    const sells = list.map((a) => a.prediction).filter((p) => p.action === "sell").sort(byWorth);
+    const buys = list.map((a) => a.prediction).filter((p) => p.action === "buy").sort(byWorth);
+    if (sells.length + buys.length === 0) continue;
+    const shownSells = sells.slice(0, MAX_SELLS);
+    const shownBuys = buys.slice(0, shownSells.length > 0 ? MAX_BUYS_WITH_SELLS : MAX_EMBEDS - 2);
+    const embeds = [
+      ...shownSells.map((p, i) => card(p, extras, i === 0 ? `🔴 VERKAUFEN · ${sells.length}` : undefined)),
+      ...shownBuys.map((p, i) => card(p, extras, i === 0 ? `🟢 KAUFEN · ${buys.length}` : undefined)),
+    ];
+    const hidden = sells.length + buys.length - embeds.length;
+    const host = extras.publicUrl?.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    const more = hidden > 0 ? `+${hidden} weitere${host ? ` auf ${host}` : ""}` : null;
+    const last = embeds[embeds.length - 1]!;
+    last.footer = { text: [realm, more, "●●●○○ Sicherheit"].filter(Boolean).join(" · ") };
+    last.timestamp = new Date(Math.max(...list.map((a) => a.ts))).toISOString();
     messages.push({ embeds });
   }
   return messages;
@@ -129,8 +145,9 @@ export async function sendDiscord(
   alerts: Alert[],
   fetchImpl: typeof fetch = fetch,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  extras: DiscordExtras = {},
 ): Promise<void> {
-  for (const { embeds } of discordMessages(alerts)) {
+  for (const { embeds } of discordMessages(alerts, extras)) {
     for (let attempt = 0; ; attempt++) {
       try {
         const res = await fetchImpl(webhookUrl, {

@@ -1,71 +1,153 @@
 import type { Action, Prediction } from "../engine/predict.ts";
 import { byWorth } from "../engine/rank.ts";
 import { predictionsFor } from "../engine/run.ts";
-import { dots, shortGold } from "../live/discord.ts";
+import { iconUrl, resolveIcons, wowheadUrl } from "../icons.ts";
+import { dots } from "../live/discord.ts";
 import type { AppContext } from "./server.ts";
-
-const TOP = 15;
-const shortDate = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
-const pct = (x: number) => `${x >= 0 ? "+" : "−"}${Math.abs(Math.round(x * 100))} %`;
-
-/** Eine Tabellenzeile: was, wie viel, Preis jetzt → Ziel, bis wann, wie sicher. Begründung beim Drüberfahren. */
-function row(p: Prediction): string {
-  const change = p.action === "buy" ? `📈 ${pct(p.netUpside)}` : p.impact < 0 ? `📉 ${pct(p.impact)}` : "💰 Peak";
-  const prices =
-    p.currentPrice === null ? "–" : p.expectedPeakPrice === null || p.impact >= 0 && p.action === "sell" ? shortGold(p.currentPrice) : `${shortGold(p.currentPrice)} → ${shortGold(p.expectedPeakPrice)}`;
-  const until = p.action === "buy" ? (p.buyUntil ? shortDate(p.buyUntil) : "–") : p.sellTo ? shortDate(p.sellTo) : "jetzt";
-  const why = p.drivers[0] ? (p.source === "ai" ? p.drivers[0].reason : `${p.drivers[0].chain}. ${p.drivers[0].reason}`) : p.eventName;
-  return `<tr title="${esc(why)}"><td>${esc(p.itemName)}</td><td>${change}</td><td>${prices}</td><td>${until}</td><td class="dots">${dots(p.confidence)}${p.source === "ai" ? " 🤖" : ""}</td></tr>`;
-}
-
-function topTable(list: Prediction[], action: Action): string {
-  const top = list.filter((p) => p.action === action).sort(byWorth);
-  if (top.length === 0) return `<p class="muted">Gerade nichts.</p>`;
-  const more = top.length > TOP ? `<p class="muted" style="margin-top:8px">+${top.length - TOP} weitere · im Spiel <code>/wahp list</code></p>` : "";
-  const head = action === "buy" ? "kaufen bis" : "verkaufen bis";
-  return `<div class="scroll"><table><thead><tr><th>Item</th><th>Erwartung</th><th>Preis jetzt → Ziel</th><th>${head}</th><th>Sicherheit</th></tr></thead><tbody>${top.slice(0, TOP).map(row).join("")}</tbody></table></div>${more}`;
-}
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 const when = (ms: number) =>
-  new Date(ms).toLocaleString("de-DE", { timeZone: "Europe/Berlin", dateStyle: "medium", timeStyle: "short" });
+  new Date(ms).toLocaleString("de-DE", { timeZone: "Europe/Berlin", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const shortDate = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+const pct = (x: number) => `${x >= 0 ? "+" : "−"}${Math.abs(Math.round(x * 100))} %`;
+
+/** Gold wie im Spiel: 75g 93s in Münzfarben, Kupfer nur bei kleinen Beträgen */
+function coins(copper: number): string {
+  const c = Math.round(copper);
+  const g = Math.floor(c / 10_000);
+  const s = Math.floor((c % 10_000) / 100);
+  const parts: string[] = [];
+  if (g) parts.push(`<span class="g">${g}</span>`);
+  if (s && g < 100) parts.push(`<span class="s">${s}</span>`);
+  if (!g && (c % 100 || !s)) parts.push(`<span class="c">${c % 100}</span>`);
+  return parts.join(" ");
+}
+
+const FIRST = 48; // so viele Karten pro Liste sofort, der Rest mit "Mehr anzeigen" oder Suche
+
+type Meta = Map<number, { icon: string | null; quality: number | null }>;
+
+function card(p: Prediction, meta: Meta): string {
+  const m = meta.get(p.itemId);
+  const quality = m?.quality ?? 1;
+  const badge = p.action === "buy" ? pct(p.netUpside) : p.impact < 0 ? pct(p.impact) : "Peak";
+  const price =
+    p.currentPrice === null
+      ? ""
+      : p.expectedPeakPrice !== null && !(p.action === "sell" && p.impact >= 0)
+        ? `${coins(p.currentPrice)} <span class="arrow">→</span> ${coins(p.expectedPeakPrice)}`
+        : coins(p.currentPrice);
+  const until = p.action === "buy" ? p.buyUntil : p.sellTo;
+  const deadline = until ? `⏳ ${shortDate(until)}` : p.action === "sell" ? "⏳ jetzt" : "";
+  const why = p.drivers[0] ? (p.source === "ai" ? p.drivers[0].reason : `${p.drivers[0].chain}. ${p.drivers[0].reason}`) : p.eventName;
+  const icon = m?.icon
+    ? `<img class="icon" src="${iconUrl(m.icon, "large")}" alt="" loading="lazy" width="48" height="48">`
+    : `<span class="icon none">${esc(p.itemName.slice(0, 1))}</span>`;
+  return `<article class="card ${p.action}" data-name="${esc(p.itemName.toLowerCase())}">
+  <a class="item q${quality}" href="${wowheadUrl(p.itemId)}" target="_blank" rel="noopener">${icon}<span class="name">${esc(p.itemName)}</span></a>
+  <span class="badge">${badge}</span>
+  <div class="price">${price}</div>
+  <div class="meta">${deadline}<span class="dots" title="Sicherheit ${Math.round(p.confidence * 100)} %">${dots(p.confidence)}</span>${p.source === "ai" ? `<span class="ai" title="KI-Prognose">🤖</span>` : ""}</div>
+  <p class="why"><b>${esc(p.eventName)}</b> ${esc(why)}</p>
+</article>`;
+}
+
+function grid(list: Prediction[], meta: Meta): string {
+  if (list.length === 0) return `<p class="empty">Gerade nichts.</p>`;
+  const cards = list.map((p, i) => card(p, meta).replace('<article class="card', i < FIRST ? '<article class="card' : '<article class="card later'));
+  const more = list.length > FIRST ? `<button class="more" type="button">Alle ${list.length} anzeigen</button>` : "";
+  return `<div class="grid">${cards.join("")}</div>${more}`;
+}
 
 const STYLE = `
-:root { color-scheme: light dark; --bg: #f6f5f2; --fg: #1d1c1a; --muted: #6b6862; --card: #fff; --line: #e3e0da; --accent: #a8641e; }
-@media (prefers-color-scheme: dark) { :root { --bg: #161513; --fg: #ecebe8; --muted: #a09c94; --card: #1f1e1b; --line: #34322e; --accent: #e0a25a; } }
+:root { color-scheme: dark; --bg: #0e1014; --panel: #161920; --card: #1b1f27; --line: #2a2f3a; --fg: #ecebe8; --muted: #9298a2;
+  --red: #ff5f52; --green: #3ddc84; --gold: #f2c94c; --silver: #c9ced6; --copper: #d58a54; --accent: #e0a25a; }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
-main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
-h1 { font-size: 1.5rem; margin: 0 0 4px; }
-h2 { font-size: 1rem; margin: 28px 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-p { margin: 0 0 12px; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 56px; }
+a { color: inherit; text-decoration: none; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 18px; }
+h1 { font-size: 1.35rem; margin: 0; display: flex; align-items: center; gap: 10px; }
+.live { width: 10px; height: 10px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px var(--green); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); font-size: .85rem; white-space: nowrap; }
+.chip b { color: var(--fg); font-weight: 600; }
+.chip a { color: var(--accent); }
+.bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0 16px; }
+.tabs { display: flex; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
+.tab { border: 0; background: none; color: var(--muted); font: inherit; font-weight: 600; padding: 7px 14px; border-radius: 9px; cursor: pointer; }
+.tab[aria-selected="true"] { background: var(--card); color: var(--fg); }
+.tab .n { color: var(--muted); font-weight: 500; margin-left: 4px; }
+.search { flex: 1 1 220px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; color: var(--fg); font: inherit; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.card { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 12px 10px; cursor: pointer;
+  border-left: 3px solid var(--red); transition: border-color .15s, transform .15s; }
+.card.buy { border-left-color: var(--green); }
+.card:hover { border-color: #3a4150; transform: translateY(-1px); }
+.card.later, .card.hide { display: none; }
+.showall .card.later { display: block; }
+.showall .card.later.hide { display: none; }
+.item { display: flex; align-items: center; gap: 10px; padding-right: 64px; min-height: 48px; }
+.icon { width: 48px; height: 48px; border-radius: 8px; border: 2px solid #555; flex: none; background: #000; }
+.icon.none { display: grid; place-items: center; color: var(--muted); font-weight: 700; font-size: 1.2rem; }
+.name { font-weight: 600; line-height: 1.25; }
+.q0 .name { color: #9d9d9d; } .q0 .icon { border-color: #9d9d9d; }
+.q1 .name { color: #ffffff; } .q1 .icon { border-color: #6b6b6b; }
+.q2 .name { color: #1eff00; } .q2 .icon { border-color: #1eff00; }
+.q3 .name { color: #3d9bff; } .q3 .icon { border-color: #0070dd; }
+.q4 .name { color: #b65cff; } .q4 .icon { border-color: #a335ee; }
+.q5 .name { color: #ff8000; } .q5 .icon { border-color: #ff8000; }
+.badge { position: absolute; top: 12px; right: 12px; font-weight: 800; font-size: 1.05rem; padding: 3px 9px; border-radius: 8px;
+  color: var(--red); background: rgba(255, 95, 82, .12); font-variant-numeric: tabular-nums; }
+.buy .badge { color: var(--green); background: rgba(61, 220, 132, .12); }
+.price { margin-top: 8px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.price .arrow { color: var(--muted); margin: 0 2px; }
+.g { color: var(--gold); } .g::after { content: "g"; opacity: .8; margin-left: 1px; }
+.s { color: var(--silver); } .s::after { content: "s"; opacity: .8; margin-left: 1px; }
+.c { color: var(--copper); } .c::after { content: "c"; opacity: .8; margin-left: 1px; }
+.meta { display: flex; gap: 10px; align-items: center; margin-top: 4px; color: var(--muted); font-size: .85rem; }
+.dots { letter-spacing: 1px; color: var(--accent); }
+.why { display: none; margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
+.why b { color: var(--fg); font-weight: 600; margin-right: 4px; }
+.card.open .why { display: block; }
+.more { margin: 14px auto 0; display: block; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 16px; font: inherit; cursor: pointer; }
+.showall + .more, .searching .more { display: none; }
+.empty { color: var(--muted); }
+.panel { display: none; } .panel.active { display: block; }
+.login { max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.login form { display: flex; gap: 8px; margin-top: 12px; }
+.login input { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; color: var(--fg); font: inherit; }
+.login button { background: var(--accent); color: #1b1206; border: 0; border-radius: 10px; padding: 9px 16px; font-weight: 700; cursor: pointer; }
 .muted { color: var(--muted); }
-.ok { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #3a9a5b; margin-right: 8px; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-th { color: var(--muted); font-weight: 500; font-size: .875rem; }
-.scroll { overflow-x: auto; }
-.dots { white-space: nowrap; letter-spacing: 1px; }
-tbody tr[title] { cursor: help; }
-td { white-space: nowrap; }
-td:first-child { white-space: normal; }
-a { color: var(--accent); }
-ul { margin: 0; padding-left: 20px; }
-form { display: flex; gap: 8px; flex-wrap: wrap; }
-input { flex: 1 1 240px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
-button { padding: 8px 14px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+code { background: var(--panel); padding: 1px 6px; border-radius: 6px; }
+`;
+
+const SCRIPT = `
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(o => o.setAttribute('aria-selected', o === t));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === t.dataset.panel));
+}));
+document.querySelectorAll('.more').forEach(b => b.addEventListener('click', () => b.previousElementSibling.classList.add('showall')));
+document.addEventListener('click', e => {
+  const c = e.target.closest('.card');
+  if (c && !e.target.closest('a')) c.classList.toggle('open');
+});
+const q = document.querySelector('.search');
+if (q) q.addEventListener('input', () => {
+  const v = q.value.trim().toLowerCase();
+  document.querySelectorAll('.grid').forEach(g => { g.classList.toggle('showall', !!v); g.parentElement.classList.toggle('searching', !!v); });
+  document.querySelectorAll('.card').forEach(c => c.classList.toggle('hide', !!v && !c.dataset.name.includes(v)));
+});
 `;
 
 /**
- * Startseite. Ohne Leserecht nur "läuft" und ein Feld für den READ_TOKEN,
- * mit Leserecht ein Überblick pro Realm und Links auf alle Ansichten.
+ * Startseite. Ohne Leserecht nur "läuft" und ein Feld für den READ_TOKEN.
+ * Mit Leserecht: Verkaufen und Kaufen als Karten mit Icons, Suche, Wowhead-Tooltips.
  */
 export function homePage(ctx: AppContext, req: Request, allowed: boolean): Response {
   const token = new URL(req.url).searchParams.get("token");
-  // Token an Links nur hängen, wenn er per ?token= kam (Browser)
   const link = (path: string) => {
     if (!token || !ctx.config.readToken) return esc(path);
     return esc(`${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`);
@@ -74,62 +156,57 @@ export function homePage(ctx: AppContext, req: Request, allowed: boolean): Respo
   let body: string;
   if (!allowed) {
     body = `
-      <div class="card">
-        <p>Die Daten sind geschützt. Mit dem <code>READ_TOKEN</code> siehst du Scans, KI-Bewertungen und Prognosen.</p>
+      <div class="login">
+        <p>Die Daten sind geschützt. Mit dem <code>READ_TOKEN</code> siehst du, was du jetzt verkaufen oder kaufen solltest.</p>
         <form method="get" action="/">
           <input type="password" name="token" placeholder="READ_TOKEN" autocomplete="current-password" required>
           <button type="submit">Anzeigen</button>
         </form>
-        ${token ? `<p class="muted" style="margin-top:12px">Der Token stimmt nicht.</p>` : ""}
+        ${token ? `<p class="muted">Der Token stimmt nicht.</p>` : ""}
       </div>`;
   } else {
     const realms = ctx.repo.overview();
     const brief = ctx.repo.latestBrief();
-    // Die Listen für den Realm mit dem neuesten Scan, sortiert nach Gold pro Stück
-    const main = realms[0]?.realm;
-    const predictions = main ? predictionsFor(ctx, main, (ctx.now ?? Date.now)()) : [];
-    const lists = main
-      ? `<h2>🔴 Lohnt sich jetzt zu verkaufen · ${esc(main)}</h2><div class="card">${topTable(predictions, "sell")}</div>
-         <h2>🟢 Jetzt kaufen · ${esc(main)}</h2><div class="card">${topTable(predictions, "buy")}</div>`
-      : "";
-    const rows = realms
-      .map(
-        (r) => `<tr><td>${esc(r.realm)}</td><td>${when(r.lastScan)}</td><td>${r.items}</td><td>${r.assessed}</td>
-          <td><a href="${link(`/predictions?realm=${r.realm}`)}">Prognosen</a> ·
-          <a href="${link(`/assessments?realm=${r.realm}&direction=up`)}">steigt</a> ·
-          <a href="${link(`/assessments?realm=${r.realm}&direction=down`)}">fällt</a> ·
-          <a href="${link(`/alerts?realm=${r.realm}`)}">Alerts</a></td></tr>`,
-      )
-      .join("");
-    body = `
-      ${lists}
-      <h2>Realms</h2>
-      <div class="card">${
-        realms.length === 0
-          ? `<p>Noch kein Scan. Im Spiel <code>/wahp scan</code>, dann <code>/reload</code>, der Companion lädt ihn hoch.</p>`
-          : `<div class="scroll"><table><thead><tr><th>Realm</th><th>Letzter Scan</th><th>Items</th><th>KI-Bewertungen</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-      }</div>
-      <h2>KI-Lagebericht</h2>
-      <div class="card">${
-        brief
-          ? `<p>Vom ${when(brief.createdAt)} (${esc(brief.model)}), ${brief.sources.length} Quellen. <a href="${link("/brief")}">Lesen</a></p>`
-          : `<p>Noch keiner. Kommt mit der ersten KI-Analyse (<code>bun run analyze</code>).</p>`
-      }</div>
-      <h2>Weitere Ansichten</h2>
-      <div class="card"><ul>
-        <li><a href="${link(`/predictions?realm=${ctx.config.defaultRealm}`)}">Prognosen (Standard-Realm ${esc(ctx.config.defaultRealm)})</a></li>
-        <li><a href="${link("/events")}">Event-Kalender mit Kauf- und Verkaufsfenstern</a></li>
-        <li><a href="${link(`/stream?realm=${ctx.config.defaultRealm}`)}">Live-Stream (Server-Sent Events)</a></li>
-      </ul></div>`;
+    const main = realms[0];
+    if (!main) {
+      body = `<p class="muted">Noch kein Scan. Im Spiel am Auktionshaus <code>/wahp</code> öffnen und scannen, der Companion lädt ihn hoch.</p>`;
+    } else {
+      const predictions = predictionsFor(ctx, main.realm, (ctx.now ?? Date.now)());
+      const pick = (a: Action) => predictions.filter((p) => p.action === a).sort(byWorth);
+      const sells = pick("sell");
+      const buys = pick("buy");
+      const ids = [...sells, ...buys].map((p) => p.itemId);
+      const meta = ctx.repo.itemMeta(ids);
+      // Fehlende Icons im Hintergrund holen, beim nächsten Laden sind sie da
+      const missing = ids.filter((id) => !meta.get(id)?.icon);
+      if (missing.length > 0) void resolveIcons(ctx.repo, missing, { max: 120, fetchImpl: ctx.iconFetch }).catch(() => {});
+      body = `
+        <div class="chips">
+          <span class="chip">🌍 <b>${esc(main.realm)}</b></span>
+          <span class="chip">📦 Scan <b>${when(main.lastScan)}</b> · ${main.items} Items</span>
+          <span class="chip">🤖 <b>${main.assessed}</b> bewertet</span>
+          ${brief ? `<span class="chip">📰 <a href="${link("/brief")}">Lagebericht ${when(brief.createdAt)}</a> · ${brief.sources.length} Quellen</span>` : ""}
+        </div>
+        <div class="bar">
+          <div class="tabs" role="tablist">
+            <button class="tab" role="tab" aria-selected="true" data-panel="sell">🔴 Verkaufen<span class="n">${sells.length}</span></button>
+            <button class="tab" role="tab" aria-selected="false" data-panel="buy">🟢 Kaufen<span class="n">${buys.length}</span></button>
+          </div>
+          <input class="search" type="search" placeholder="Item suchen …" aria-label="Item suchen">
+        </div>
+        <section class="panel active" id="sell">${grid(sells, meta)}</section>
+        <section class="panel" id="buy">${grid(buys, meta)}</section>`;
+    }
   }
 
   const html = `<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>AH-Prognose</title><style>${STYLE}</style></head>
+<meta name="robots" content="noindex"><title>AH-Prognose</title><style>${STYLE}</style>
+<script>const whTooltips = { colorLinks: false, iconizeLinks: false, renameLinks: false };</script>
+<script src="https://wow.zamimg.com/js/tooltips.js" async></script></head>
 <body><main>
-  <h1><span class="ok"></span>AH-Prognose-Server läuft</h1>
-  <p class="muted">WoW Forever · Prognosen aus AH-Scans und KI-Recherche</p>
+  <header><h1><span class="live"></span>AH-Prognose</h1><span class="muted">WoW Forever</span></header>
   ${body}
-</main></body></html>`;
+</main><script>${SCRIPT}</script></body></html>`;
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
