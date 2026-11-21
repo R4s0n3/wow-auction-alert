@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+data
+dist
+addon
+test
+assets
+companion.json
+companion-state.json
+*.sqlite*

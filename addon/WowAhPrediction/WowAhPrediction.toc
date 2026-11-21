@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: AH-Prognose
+## Notes: Zeigt im Tooltip, welche Items vor kommenden Raids und Phasen steigen. Scannt das AH für den Companion.
+## Version: 0.1.0
+## SavedVariables: WAHP_DB
+
+Data.lua
+Core.lua
+Scan.lua
+Tooltip.lua
