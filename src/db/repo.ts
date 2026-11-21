@@ -191,6 +191,19 @@ export class Repo {
   }
 
   /** Realms, für die seit `sinceMs` Scans reingekommen sind */
+  /** Pro Realm: letzter Scan, Items darin, KI-Bewertungen. Neueste zuerst. */
+  overview(): Array<{ realm: string; lastScan: number; items: number; assessed: number }> {
+    return this.db
+      .query(
+        `SELECT s.realm, s.last AS lastScan,
+           (SELECT COUNT(*) FROM price_snapshots p WHERE p.realm = s.realm AND p.ts = s.last) AS items,
+           (SELECT COUNT(*) FROM ai_assessments a WHERE a.realm = s.realm) AS assessed
+         FROM (SELECT realm, MAX(ts) AS last FROM price_snapshots GROUP BY realm) s
+         ORDER BY s.last DESC`,
+      )
+      .all() as Array<{ realm: string; lastScan: number; items: number; assessed: number }>;
+  }
+
   realms(sinceMs: number): string[] {
     const rows = this.db
       .query(`SELECT DISTINCT realm FROM price_snapshots WHERE ts >= $sinceMs`)

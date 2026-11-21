@@ -7,6 +7,7 @@ import { predictionsFor } from "../engine/run.ts";
 import { toAddonLua } from "../export/lua.ts";
 import type { Knowledge } from "../knowledge/types.ts";
 import type { LiveHub } from "../live/hub.ts";
+import { homePage } from "./home.ts";
 
 export interface AppContext {
   repo: Repo;
@@ -104,6 +105,8 @@ export function startServer(ctx: AppContext, port = ctx.config.port) {
     port,
     maxRequestBodySize: 10 * 1024 * 1024,
     routes: {
+      "/": (req) => homePage(ctx, req, canRead(req, ctx.config)),
+      "/favicon.ico": () => new Response(null, { status: 204 }),
       "/health": () => Response.json({ ok: true }),
 
       "/events": (req) => {

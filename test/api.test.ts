@@ -149,6 +149,36 @@ describe("Engine + Live", () => {
   });
 });
 
+describe("Startseite", () => {
+  test("ohne READ_TOKEN: Überblick mit Realm, Links ohne Token", async () => {
+    ctx = makeContext();
+    await postScan(scan(3000));
+    const res = await fetch(url("/"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain("AH-Prognose-Server läuft");
+    expect(html).toContain("<td>eu</td>");
+    expect(html).toContain('href="/predictions?realm=eu"');
+    expect(html).toContain("Noch keiner"); // kein Lagebericht
+    expect((await fetch(url("/favicon.ico"))).status).toBe(204);
+  });
+
+  test("mit READ_TOKEN: ohne Token nur das Formular, mit Token Daten und Links mit Token", async () => {
+    ctx = { ...makeContext(), config: loadConfig({ INGEST_TOKEN: TOKEN, READ_TOKEN: "le<s>en", DEFAULT_REALM: "eu" }) };
+    await postScan(scan(3000));
+    const locked = await (await fetch(url("/"))).text();
+    expect(locked).toContain('name="token"');
+    expect(locked).not.toContain("<td>eu</td>");
+    expect(await (await fetch(url("/?token=falsch"))).text()).toContain("Der Token stimmt nicht");
+
+    const open = await (await fetch(url(`/?token=${encodeURIComponent("le<s>en")}`))).text();
+    expect(open).toContain("<td>eu</td>");
+    expect(open).toContain(`href="/predictions?realm=eu&amp;token=le%3Cs%3Een"`);
+    expect(open).not.toContain("le<s>en");
+  });
+});
+
 describe("READ_TOKEN fürs Netz", () => {
   test("ohne Token offen, mit Token nur mit READ_TOKEN oder INGEST_TOKEN lesbar, /health immer", async () => {
     expect((await fetch(url("/predictions"))).status).toBe(200);
