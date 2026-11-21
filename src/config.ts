@@ -21,6 +21,13 @@ export interface Config {
   openrouterApiKey: string;
   /** Anthropic-Schreibweise (claude-opus-5-5), für OpenRouter wird sie umgesetzt */
   aiModel: string;
+  /**
+   * Woher der Lagebericht kommt: "feeds" (Standard) sammelt Artikel kostenlos aus RSS-Feeds
+   * und braucht einen einzigen Modellaufruf. "websearch" lässt das Modell selbst suchen (teurer).
+   */
+  aiResearchMode: "feeds" | "websearch";
+  /** Modell für den Lagebericht, Standard wie AI_MODEL. Hier lohnt ein stärkeres Modell am ehesten. */
+  aiResearchModel: string;
   aiEffort: "low" | "medium" | "high" | "xhigh" | "max";
   /** Lagebericht (Websuche) wird neu recherchiert, wenn er älter ist */
   aiBriefMaxAgeHours: number;
@@ -56,6 +63,12 @@ function num(value: string | undefined, fallback: number): number {
   return n;
 }
 
+function researchMode(value: string | undefined): Config["aiResearchMode"] {
+  if (!value) return "feeds";
+  if (value !== "feeds" && value !== "websearch") throw new Error('AI_RESEARCH_MODE muss "feeds" oder "websearch" sein');
+  return value;
+}
+
 function effort(value: string | undefined): Config["aiEffort"] {
   if (!value) return "medium";
   if (!(EFFORTS as readonly string[]).includes(value)) throw new Error(`AI_EFFORT muss eins von ${EFFORTS.join(", ")} sein`);
@@ -79,6 +92,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     aiProvider: provider(env),
     openrouterApiKey: env.OPENROUTER_API_KEY ?? "",
     aiModel: env.AI_MODEL || "claude-opus-5-5",
+    aiResearchMode: researchMode(env.AI_RESEARCH_MODE),
+    aiResearchModel: env.AI_RESEARCH_MODEL || env.AI_MODEL || "claude-opus-5-5",
     aiEffort: effort(env.AI_EFFORT),
     aiBriefMaxAgeHours: num(env.AI_BRIEF_MAX_AGE_HOURS, 24),
     aiReassessHours: num(env.AI_REASSESS_HOURS, 72),

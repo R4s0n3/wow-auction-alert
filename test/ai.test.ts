@@ -283,7 +283,8 @@ function assess(body: any, maxItems = 2): Reply {
 
 function setup(over: Partial<Config> = {}) {
   const repo = new Repo(openDatabase(":memory:"));
-  const config = { ...loadConfig({}), aiChunkSize: 3, aiConcurrency: 2, ...over };
+  // Standard hier: Websuche (die meisten Tests prüfen sie); der Feed-Modus hat eigene Tests
+  const config = { ...loadConfig({ AI_RESEARCH_MODE: "websearch" }), aiChunkSize: 3, aiConcurrency: 2, ...over };
   const scan = (ts: number, factor: number) =>
     repo.insertScan(REALM, "companion", ts, [
       { itemId: 13466, minBuyout: 3500, marketPrice: Math.round(4000 * factor), quantity: 300, name: "Pestblüte", quality: 1, category: "Handwerkswaren/Kräuter" },
@@ -425,7 +426,7 @@ describe("runAnalysis gegen nachgebaute Claude-API", () => {
   });
 
   test("über OpenRouter: Modellname umgesetzt, nur OpenRouter-Key, kein Anthropic-Fallback, echte Kosten", async () => {
-    const config = { ...loadConfig({ OPENROUTER_API_KEY: "or-test" }), aiChunkSize: 3, aiConcurrency: 2 };
+    const config = { ...loadConfig({ OPENROUTER_API_KEY: "or-test", AI_RESEARCH_MODE: "websearch" }), aiChunkSize: 3, aiConcurrency: 2 };
     expect(config.aiProvider).toBe("openrouter");
     const { repo, deps } = setup(config);
     // Ein gesetzter Anthropic-Key darf nie bei OpenRouter landen
@@ -471,7 +472,7 @@ describe("runAnalysis gegen nachgebaute Claude-API", () => {
 
   test("DeepSeek über OpenRouter: Modellname bleibt, OpenRouter-Suche, nur passende Anbieter", async () => {
     const model = "deepseek/deepseek-v4.1-flash-1017";
-    const config = { ...loadConfig({ OPENROUTER_API_KEY: "or-test", AI_MODEL: model }), aiChunkSize: 3, aiConcurrency: 2 };
+    const config = { ...loadConfig({ OPENROUTER_API_KEY: "or-test", AI_MODEL: model, AI_RESEARCH_MODE: "websearch" }), aiChunkSize: 3, aiConcurrency: 2 };
     const { deps } = setup(config);
     const client = createClient(config, mock.url.origin);
     const r = await runAnalysis({ ...deps, client: () => client }, { realm: REALM });
@@ -488,6 +489,54 @@ describe("runAnalysis gegen nachgebaute Claude-API", () => {
     expect(rc[0]!.body.cache_control).toBeUndefined();
     expect(assessCalls()[0]!.body.output_config.format.type).toBe("json_schema");
     expect(estimateCostUsd(model, 6608, 40, 17_739)).toBeLessThan(2);
+  });
+
+  test("Feed-Modus: Bericht aus gesammelten Artikeln in einem Aufruf, ohne Websuche, eigenes Modell", async () => {
+    const docs = [
+      { site: "Wowhead", title: "Crafted Tier Sets", url: "https://w.example/tier", publishedAt: NOW - DAY, text: "Der erste Raid öffnet am 2026-12-09." },
+      { site: "Warcraft Tavern", title: "Hotfixes", url: "https://t.example/hotfix", publishedAt: NOW - 2 * DAY, text: "Writs bringen weniger." },
+    ];
+    const { repo, deps } = setup({ aiResearchMode: "feeds", aiResearchModel: "claude-sonnet-5-5" });
+    const report = "Onyxia öffnet am 2026-12-09 (https://w.example/tier).";
+    handler = (body) =>
+      String(body.messages[0].content).includes("<quelle ")
+        ? { stop_reason: "end_turn", content: [{ type: "text", text: report }] }
+        : assess(body);
+    const r = await runAnalysis({ ...deps, sources: async () => docs }, { realm: REALM });
+    expect(r).toMatchObject({ newBrief: true, assessed: 4, failedChunks: 0 });
+
+    const compile = calls.find((c) => String(c.body.messages[0].content).includes("<quelle "))!;
+    expect(compile.body.tools).toBeUndefined(); // keine Websuche, keine Suchgebühren
+    expect(compile.body.model).toBe("claude-sonnet-5-5");
+    expect(compile.body.system).toContain("Du wertest Quellen");
+    expect(compile.body.messages[0].content).toContain('<quelle nr="1" seite="Wowhead" datum="2026-11-14" url="https://w.example/tier">');
+    expect(compile.body.messages[0].content).toContain("Writs bringen weniger.");
+    expect(calls.filter((c) => c.body.tools?.length)).toHaveLength(0);
+
+    const brief = repo.latestBrief()!;
+    expect(brief).toMatchObject({ content: report, model: "claude-sonnet-5-5" });
+    expect(brief.sources.map((s) => s.url)).toEqual(["https://w.example/tier", "https://t.example/hotfix"]); // zitierte zuerst
+    expect(assessCalls()[0]!.body.model).toBe("claude-opus-5-5"); // Bewertung weiter mit AI_MODEL
+    expect(assessCalls()[0]!.body.system[0].text).toContain(report);
+  });
+
+  test("Feed-Modus: keine Quelle erreichbar, dann den alten Bericht weiter nutzen oder klar abbrechen", async () => {
+    const { repo, deps, logs } = setup({ aiResearchMode: "feeds" });
+    expect(runAnalysis({ ...deps, sources: async () => [] }, { realm: REALM })).rejects.toThrow("Keine Quelle erreichbar");
+    await Bun.sleep(10);
+    repo.saveBrief(NOW - 3 * DAY, "claude-opus-5-5", "Alter Bericht.", []);
+    const r = await runAnalysis({ ...deps, sources: async () => [] }, { realm: REALM, limit: 1 });
+    expect(r).toMatchObject({ assessed: 1 });
+    expect(logs.some((l) => l.includes("nutze den letzten Lagebericht weiter"))).toBe(true);
+    expect(assessCalls().at(-1)!.body.system[0].text).toContain("Alter Bericht.");
+  });
+
+  test("Feed-Modus kostet geschätzt einen Bruchteil der Websuche", () => {
+    const feeds = estimateCostUsd("deepseek/deepseek-v4.1-flash-1017", 0, 40, null, "feeds")!;
+    const search = estimateCostUsd("deepseek/deepseek-v4.1-flash-1017", 0, 40, null, "websearch")!;
+    expect(feeds).toBeLessThan(0.01);
+    expect(search / feeds).toBeGreaterThan(20);
+    expect(estimateCostUsd("claude-sonnet-5-5", 0, 40, null, "feeds")!).toBeLessThan(0.2);
   });
 
   test("ohne Scans gibt es eine klare Meldung", async () => {

@@ -3,10 +3,24 @@ import type { Config } from "../config.ts";
 import type { Repo } from "../db/repo.ts";
 import { isoDate } from "../engine/predict.ts";
 import type { Knowledge } from "../knowledge/types.ts";
-import { AiError, assessChunk, MAX_SEARCHES, priceFor, research, UsageTally } from "./claude.ts";
-import { assessSystem, itemsPrompt, RESEARCH_SYSTEM, researchPrompt } from "./prompts.ts";
+import { AiError, assessChunk, compileBrief, MAX_SEARCHES, priceFor, research, UsageTally } from "./claude.ts";
+import { assessSystem, itemsPrompt, RESEARCH_SYSTEM, researchPrompt, SOURCES_SYSTEM, sourcesPrompt } from "./prompts.ts";
 import { apiModel } from "./provider.ts";
-import type { Brief, MarketItem, StoredAssessment } from "./types.ts";
+import { fetchSources, type SourceDoc } from "./sources.ts";
+import type { Brief, MarketItem, Source, StoredAssessment } from "./types.ts";
+
+/** Größte Preisbewegungen seit der Vorwoche aus den eigenen Scans, als Zeilen für den Bericht */
+export function marketMovers(market: MarketItem[], top = 15): string[] {
+  const moved = market
+    .filter((i) => i.priceWeekBefore !== null && i.priceWeekBefore > 0 && i.quantity >= 5 && i.price * i.quantity >= 100_000)
+    .map((i) => ({ i, change: i.price / i.priceWeekBefore! - 1 }))
+    .filter((m) => Math.abs(m.change) >= 0.2);
+  const line = (m: { i: MarketItem; change: number }) =>
+    `- ${m.i.name ?? `Item ${m.i.itemId}`}: ${m.change >= 0 ? "+" : ""}${Math.round(m.change * 100)} % (${Math.round(m.i.priceWeekBefore! / 100)}s → ${Math.round(m.i.price / 100)}s, ${m.i.quantity} im AH)`;
+  const up = moved.filter((m) => m.change > 0).sort((a, b) => b.change - a.change).slice(0, top);
+  const down = moved.filter((m) => m.change < 0).sort((a, b) => a.change - b.change).slice(0, top);
+  return [...up.map(line), ...down.map(line)];
+}
 
 const HOUR = 3_600_000;
 /** Springt der Preis seit der letzten Bewertung um mehr als das, wird neu bewertet */
@@ -20,6 +34,8 @@ export interface AnalyzeDeps {
   client: () => Anthropic;
   log: (msg: string) => void;
   now?: () => number;
+  /** Quellen für den Lagebericht im Feed-Modus (Tests setzen hier feste Artikel ein) */
+  sources?: () => Promise<SourceDoc[]>;
 }
 
 export interface AnalyzeOptions {
@@ -74,14 +90,21 @@ export function estimateCostUsd(
   itemCount: number,
   chunkSize: number,
   briefChars: number | null,
+  researchMode: "feeds" | "websearch" = "websearch",
 ): number | null {
   const p = priceFor(model);
   if (!p) return null;
   const chunks = Math.ceil(itemCount / chunkSize);
   const prefix = (briefChars ?? 15_000) / 3.5 + 1_500; // System-Prompt + Lagebericht in Tokens
-  // Gemessen am 2026-11-21: ungecacht und ohne Suchlimit kostete eine Recherche $5.88.
+  // Websuche, gemessen am 2026-11-21: ungecacht und ohne Suchlimit kostete eine Recherche $5.88.
   // Mit Cache und höchstens MAX_SEARCHES Suchen konservativ ~50k Tokens pro Suche.
-  const research = briefChars === null ? (MAX_SEARCHES * 50_000 * p.input + 20_000 * p.output) / 1e6 + MAX_SEARCHES * 0.01 : 0;
+  // Feeds: ~35k Tokens Artikel rein, ~8k Bericht raus, keine Suchgebühren.
+  const research =
+    briefChars !== null
+      ? 0
+      : researchMode === "feeds"
+        ? (35_000 * p.input + 8_000 * p.output) / 1e6
+        : (MAX_SEARCHES * 50_000 * p.input + 20_000 * p.output) / 1e6 + MAX_SEARCHES * 0.01;
   const input = itemCount * 40 + chunks * 150;
   const output = itemCount * 110 + chunks * 2_000; // JSON + Nachdenken
   const cache = chunks > 0 ? prefix * p.input * 1.25 + (chunks - 1) * prefix * p.cacheRead : 0;
@@ -143,7 +166,7 @@ export async function runAnalysis(deps: AnalyzeDeps, opts: AnalyzeOptions): Prom
   };
 
   if (opts.dryRun) {
-    result.costUsd = estimateCostUsd(config.aiModel, candidates.length, config.aiChunkSize, needBrief ? null : latest!.content.length);
+    result.costUsd = estimateCostUsd(config.aiModel, candidates.length, config.aiChunkSize, needBrief ? null : latest!.content.length, config.aiResearchMode);
     return result;
   }
   if (candidates.length === 0 && !needBrief) return result;
@@ -158,13 +181,33 @@ export async function runAnalysis(deps: AnalyzeDeps, opts: AnalyzeOptions): Prom
   };
 
   let brief: Brief;
-  if (needBrief) {
+  // Die umsatzstärksten Items helfen der Recherche, sich auf das Wichtige zu konzentrieren
+  const focus = [...market].sort((a, b) => b.price * b.quantity - a.price * a.quantity).slice(0, 80);
+  const researchModel = apiModel({ aiProvider: provider, aiModel: config.aiResearchModel });
+  let fresh: { content: string; sources: Source[] } | null = null;
+  if (needBrief && config.aiResearchMode === "feeds") {
+    // Kostenlos gesammelte Artikel, dann ein einziger Aufruf ohne Websuche
+    const docs = await (deps.sources ?? (() => fetchSources({ now, log })))();
+    if (docs.length === 0) {
+      if (!latest) throw new AiError("Keine Quelle erreichbar und noch kein Lagebericht. AI_RESEARCH_MODE=websearch nutzt die bezahlte Websuche.");
+      log("Keine Quelle erreichbar, nutze den letzten Lagebericht weiter.");
+    } else {
+      log(`Werte ${docs.length} Artikel aus (${[...new Set(docs.map((d) => d.site))].join(", ")}) mit ${researchModel} …`);
+      fresh = await compileBrief(client, {
+        provider,
+        model: researchModel,
+        effort: config.aiEffort,
+        system: SOURCES_SYSTEM,
+        prompt: sourcesPrompt(today, deps.knowledge, focus, docs, marketMovers(market)),
+        usage,
+        sources: docs.map((d) => ({ url: d.url, title: `${d.site}: ${d.title}` })),
+      });
+    }
+  } else if (needBrief) {
     log("Recherchiere die aktuelle Lage mit Websuche, das dauert ein paar Minuten …");
-    // Die umsatzstärksten Items helfen der Recherche, sich auf das Wichtige zu konzentrieren
-    const focus = [...market].sort((a, b) => b.price * b.quantity - a.price * a.quantity).slice(0, 80);
-    const r = await research(client, {
+    fresh = await research(client, {
       provider,
-      model,
+      model: researchModel,
       effort: config.aiEffort,
       system: RESEARCH_SYSTEM,
       prompt: researchPrompt(today, deps.knowledge, focus),
@@ -172,8 +215,16 @@ export async function runAnalysis(deps: AnalyzeDeps, opts: AnalyzeOptions): Prom
       budgetUsd: config.aiBudgetUsd,
       costUsd: cost,
     });
-    brief = repo.saveBrief(now, config.aiModel, r.content, r.sources);
-    log(`Lagebericht #${brief.id}: ${r.content.length} Zeichen, ${r.sources.length} Quellen, ${usage.webSearches} Suchen`);
+  }
+  if (fresh) {
+    brief = repo.saveBrief(now, config.aiResearchModel, fresh.content, fresh.sources);
+    const c = cost();
+    log(
+      `Lagebericht #${brief.id}: ${fresh.content.length} Zeichen, ${fresh.sources.length} Quellen, ${usage.webSearches} Suchen` +
+        (c === null ? "" : `, ~$${c.toFixed(3)}`),
+    );
+  } else if (needBrief) {
+    brief = latest!;
   } else {
     brief = latest!;
     log(`Nutze Lagebericht #${brief.id} vom ${new Date(brief.createdAt).toLocaleString("de-DE")}`);

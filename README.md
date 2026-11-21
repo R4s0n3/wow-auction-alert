@@ -120,10 +120,15 @@ bun run analyze --new-brief --all         # neu recherchieren und alles neu bewe
 
 Ein Lauf hat zwei Schritte:
 
-1. **Recherche:** Claude sucht selbst im Netz (Blizzard-News, Patchnotes, Wowhead, Reddit …) und
-   schreibt einen Lagebericht mit Quellen: Zeitplan, Bossmechaniken, Berufsänderungen,
-   Angebotsseite, Marktberichte. Der Bericht wird gespeichert und bis zu `AI_BRIEF_MAX_AGE_HOURS`
-   (24 h) wiederverwendet. Ansehen: `GET /brief`.
+1. **Lagebericht:** Der Server holt kostenlos die Forever-News-Feeds von Wowhead und Warcraft
+   Tavern, etwa 50 Artikel der letzten drei Wochen. Dazu kommen die größten Preisbewegungen aus
+   den eigenen Scans. Ein einziger Modellaufruf macht daraus den Lagebericht mit Quellen:
+   Zeitplan, Bossmechaniken, Berufsänderungen, Angebotsseite, Verkaufschancen.
+   Mit DeepSeek kostet das etwa einen halben Cent, mit Sonnet etwa 10 Cent
+   (`AI_RESEARCH_MODEL`, sonst wie `AI_MODEL`). `AI_RESEARCH_MODE=websearch` lässt das Modell
+   stattdessen selbst im Netz suchen. Das ist teurer: höchstens 10 Suchen mit Gebühren und vielen
+   Tokens für die Suchergebnisse. Der Bericht wird bis zu `AI_BRIEF_MAX_AGE_HOURS` (24 h)
+   wiederverwendet. Ansehen: `GET /brief`.
 2. **Bewertung:** Alle Items aus dem neuesten Scan (ohne graue), die umsatzstärksten zuerst, in
    Blöcken von `AI_CHUNK_SIZE` (40). Claude bekommt den Lagebericht plus Name, Kategorie, Preis,
    Trend zur Vorwoche und Menge und antwortet in einem festen, typisierten Schema

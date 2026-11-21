@@ -242,6 +242,36 @@ export async function research(
   return { content, sources: collectSources(blocks) };
 }
 
+/**
+ * Lagebericht aus vorher gesammelten Quellen: ein einziger Aufruf ohne Werkzeuge.
+ * Kostet mit DeepSeek Flash etwa einen halben Cent, weil keine Suchgebühren und
+ * keine Suchergebnis-Tokens anfallen.
+ */
+export async function compileBrief(
+  client: Anthropic,
+  opts: { provider: AiProvider; model: string; effort: Effort; system: string; prompt: string; usage: UsageTally; sources: Source[] },
+): Promise<ResearchResult> {
+  const msg = await client.beta.messages
+    .stream({
+      model: opts.model,
+      max_tokens: 32_000,
+      ...providerParams(opts.provider, opts.model),
+      thinking: { type: "adaptive" },
+      output_config: { effort: opts.effort },
+      system: opts.system,
+      messages: [{ role: "user", content: opts.prompt }],
+    })
+    .finalMessage();
+  opts.usage.add(msg.usage);
+  checkStop(msg, "Lagebericht");
+  if (msg.stop_reason === "max_tokens") throw new AiError("Lagebericht: Antwort abgeschnitten (max_tokens)");
+  const content = finalText(msg.content);
+  if (!content) throw new AiError("Lagebericht: kein Text in der Antwort");
+  // Zitierte Quellen zuerst, dann die übrigen
+  const cited = opts.sources.filter((s) => content.includes(s.url));
+  return { content, sources: [...cited, ...opts.sources.filter((s) => !content.includes(s.url))] };
+}
+
 export type AssessResult = { ok: true; assessments: Assessment[] } | { ok: false; truncated: true };
 
 /**
