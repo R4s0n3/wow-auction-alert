@@ -1,48 +1,104 @@
 import type { Alert } from "../db/repo.ts";
-import { ACTION_LABEL, formatDate, formatGold, formatPct } from "../format.ts";
+import type { Action, Prediction } from "../engine/predict.ts";
 
-const MAX_CONTENT = 1900; // Discord-Limit ist 2000 Zeichen
+// Eine Nachricht pro Realm und Durchlauf, darin eine Karte (Embed) pro Aktion,
+// pro Item eine Zeile mit Symbolen statt Sätzen. Die Begründung steht im Spiel
+// im Tooltip (Shift), hier nur das, was man zum Handeln braucht.
 
-export function formatAlert(alert: Alert): string {
-  const p = alert.prediction;
-  const icon = p.action === "buy" ? "🟢" : "🔴";
-  const falling = p.impact < 0;
-  const when = p.eventDate ? `, ${formatDate(p.eventDate)}` : "";
-  const by = p.source === "ai" ? " · KI-Analyse" : "";
-  const lines = [
-    `${icon} **${ACTION_LABEL[p.action]}: ${p.itemName}** (${p.realm}) · ${p.eventName}${when}${by}`,
-    falling
-      ? `Erwartet ${formatPct(p.impact)} Preisverfall · Sicherheit ${Math.round(p.confidence * 100)} %`
-      : `Erwartet ${formatPct(p.netUpside)} nach AH-Gebühr · Sicherheit ${Math.round(p.confidence * 100)} %`,
-  ];
-  if (p.currentPrice !== null) {
-    lines.push(`Jetzt ${formatGold(p.currentPrice)} → ${falling ? "Tief" : "Peak"} ~${formatGold(p.expectedPeakPrice)}`);
-  }
-  const window =
-    p.action === "buy"
-      ? [p.buyUntil && `Kaufen bis ${formatDate(p.buyUntil)}`, p.sellFrom && p.sellTo && `verkaufen ${formatDate(p.sellFrom)}–${formatDate(p.sellTo)}`]
-      : [p.sellTo ? `Verkaufsfenster bis ${formatDate(p.sellTo)}` : falling ? "Bestände jetzt verkaufen" : null];
-  const windowText = window.filter(Boolean).join(", ");
-  if (windowText) lines.push(windowText);
-  const top = p.drivers[0];
-  if (top) lines.push(p.source === "ai" ? `Warum: ${top.reason}` : `Warum: ${top.chain}. ${top.reason}`);
-  return lines.join("\n");
+const MAX_LINES = 10;
+const CARDS: Array<{ action: Action; title: string; color: number; deadline: string }> = [
+  { action: "buy", title: "🟢 KAUFEN", color: 0x2ecc71, deadline: "kaufen bis" },
+  { action: "sell", title: "🔴 VERKAUFEN", color: 0xe74c3c, deadline: "verkaufen bis" },
+];
+
+interface Embed {
+  title: string;
+  description: string;
+  color: number;
+  footer: { text: string };
+  timestamp?: string;
+}
+export interface DiscordMessage {
+  embeds: Embed[];
 }
 
-/** Packt Alerts in möglichst wenige Discord-Nachrichten unter dem Zeichenlimit. */
-export function chunkMessages(blocks: string[]): string[] {
-  const chunks: string[] = [];
-  let current = "";
-  for (const block of blocks) {
-    const text = block.length > MAX_CONTENT ? `${block.slice(0, MAX_CONTENT - 1)}…` : block;
-    if (current && current.length + 2 + text.length > MAX_CONTENT) {
-      chunks.push(current);
-      current = "";
-    }
-    current = current ? `${current}\n\n${text}` : text;
+/** Kurz und ohne Kupfer: 123g · 1g 20s · 40s · 35c */
+export function shortGold(copper: number): string {
+  const c = Math.round(copper);
+  const g = Math.floor(c / 10_000);
+  const s = Math.floor((c % 10_000) / 100);
+  if (g >= 100 || (g >= 1 && s === 0)) return `${g}g`;
+  if (g >= 1) return `${g}g ${s}s`;
+  if (s >= 1) return `${s}s`;
+  return `${c}c`;
+}
+
+/** 2026-12-05 → 05.12. */
+const shortDate = (iso: string) => {
+  const [, m, d] = iso.split("-");
+  return `${d}.${m}.`;
+};
+
+const pct = (x: number) => `${x >= 0 ? "+" : "−"}${Math.abs(Math.round(x * 100))} %`;
+
+/** Sicherheit als fünf Punkte: 0.62 → ●●●○○ */
+export function dots(confidence: number): string {
+  const n = Math.min(5, Math.max(1, Math.round(confidence * 5)));
+  return "●".repeat(n) + "○".repeat(5 - n);
+}
+
+/** Pestblüte · 📈 +50 % · 40s → 60s · ⏳ 05.12. · ●●●○○ */
+export function alertLine(p: Prediction): string {
+  const parts = [`**${p.itemName}**`];
+  const prices = p.currentPrice !== null && p.expectedPeakPrice !== null ? `${shortGold(p.currentPrice)} → ${shortGold(p.expectedPeakPrice)}` : null;
+  if (p.action === "buy") {
+    parts.push(`📈 ${pct(p.netUpside)}`);
+    if (prices) parts.push(prices);
+    if (p.buyUntil) parts.push(`⏳ ${shortDate(p.buyUntil)}`);
+  } else if (p.impact < 0) {
+    // Preis wird fallen: vorher loswerden
+    parts.push(`📉 ${pct(p.impact)}`);
+    if (prices) parts.push(prices);
+    parts.push(`⏳ ${p.sellTo ? shortDate(p.sellTo) : "jetzt"}`);
+  } else {
+    // Peak ist da: jetzt teuer verkaufen
+    parts.push("💰 Peak");
+    if (p.currentPrice !== null) parts.push(shortGold(p.currentPrice));
+    if (p.sellTo) parts.push(`⏳ ${shortDate(p.sellTo)}`);
   }
-  if (current) chunks.push(current);
-  return chunks;
+  parts.push(dots(p.confidence) + (p.source === "ai" ? " 🤖" : ""));
+  return parts.join(" · ");
+}
+
+const strength = (p: Prediction) => (p.action === "buy" ? p.netUpside : Math.abs(p.impact)) * p.confidence;
+
+export function discordMessages(alerts: Alert[]): DiscordMessage[] {
+  const realms = new Map<string, Alert[]>();
+  for (const a of alerts) realms.set(a.realm, [...(realms.get(a.realm) ?? []), a]);
+
+  const messages: DiscordMessage[] = [];
+  for (const [realm, list] of realms) {
+    const embeds: Embed[] = [];
+    for (const card of CARDS) {
+      const group = list.map((a) => a.prediction).filter((p) => p.action === card.action);
+      if (group.length === 0) continue;
+      group.sort((a, b) => strength(b) - strength(a));
+      const lines: string[] = [];
+      // Haben alle denselben Anlass (typisch bei den Handregeln), steht er einmal oben
+      if (new Set(group.map((p) => p.eventName)).size === 1) {
+        const p = group[0]!;
+        lines.push(`🗓️ ${p.eventName.split(" (")[0]}${p.eventDate ? ` · ${shortDate(p.eventDate)}` : ""}`);
+      }
+      lines.push(...group.slice(0, MAX_LINES).map(alertLine));
+      if (group.length > MAX_LINES) lines.push(`➕ ${group.length - MAX_LINES} weitere · im Spiel \`/wahp list\``);
+      const legend = [realm, `⏳ ${card.deadline}`, "●●●○○ Sicherheit", ...(group.some((p) => p.source === "ai") ? ["🤖 KI"] : [])];
+      embeds.push({ title: `${card.title} · ${group.length}`, description: lines.join("\n"), color: card.color, footer: { text: legend.join(" · ") } });
+    }
+    if (embeds.length === 0) continue;
+    embeds[embeds.length - 1]!.timestamp = new Date(Math.max(...list.map((a) => a.ts))).toISOString();
+    messages.push({ embeds });
+  }
+  return messages;
 }
 
 const MAX_RETRIES = 5;
@@ -72,13 +128,13 @@ export async function sendDiscord(
   fetchImpl: typeof fetch = fetch,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
 ): Promise<void> {
-  for (const content of chunkMessages(alerts.map(formatAlert))) {
+  for (const { embeds } of discordMessages(alerts)) {
     for (let attempt = 0; ; attempt++) {
       try {
         const res = await fetchImpl(webhookUrl, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ username: "AH-Prognose", content, allowed_mentions: { parse: [] } }),
+          body: JSON.stringify({ username: "AH-Prognose", embeds, allowed_mentions: { parse: [] } }),
         });
         if (res.status === 429 && attempt < MAX_RETRIES) {
           await sleep(Math.min(await retryAfterMs(res), MAX_WAIT_MS));

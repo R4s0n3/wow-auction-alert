@@ -4,7 +4,9 @@ import { loadConfig } from "../src/config.ts";
 import { openDatabase } from "../src/db/database.ts";
 import { Repo } from "../src/db/repo.ts";
 import { runEngine } from "../src/engine/run.ts";
-import { chunkMessages, formatAlert, sendDiscord } from "../src/live/discord.ts";
+import { alertLine, discordMessages, dots, sendDiscord, shortGold } from "../src/live/discord.ts";
+import type { Alert } from "../src/db/repo.ts";
+import type { Prediction } from "../src/engine/predict.ts";
 import { LiveHub } from "../src/live/hub.ts";
 import { DAY, EVENT_MS, testKnowledge } from "./fixtures.ts";
 
@@ -201,30 +203,73 @@ describe("READ_TOKEN fürs Netz", () => {
 });
 
 describe("Discord", () => {
-  test("formatiert Alerts lesbar und schickt sie gebündelt", async () => {
-    const { alerts } = runEngine(ctx, NOW);
-    const text = formatAlert(alerts.find((a) => a.itemId === 4)!);
-    expect(text).toContain("🟢 **KAUFEN: Pestblüte** (eu)");
-    expect(text).toContain("Kaufen bis 05.12.2026, verkaufen 08.12.2026–19.12.2026");
-    expect(text).toContain("Warum: Raids → Mungo → Pestblüte. Raid-Release");
+  const ai = (over: Partial<Prediction> = {}): Prediction => ({
+    source: "ai", realm: "eu-alliance", itemId: 13468, itemName: "Schwarzer Lotus", eventId: "ai", eventName: "Mehr Spieler auf 60",
+    eventDate: null, action: "sell", impact: -0.3, confidence: 0.7, netUpside: -0.33, currentPrice: 950_000, baselinePrice: null,
+    expectedPeakPrice: 665_000, priceBasis: "current", buyUntil: null, sellFrom: null, sellTo: "2026-12-05",
+    drivers: [{ chain: "", reason: "Mehr Lotus-Farmer.", impact: -0.3, confidence: 0.7 }], ...over,
+  });
+  const alertOf = (p: Prediction, realm = p.realm): Alert => ({ id: 1, ts: NOW, realm, itemId: p.itemId, eventId: p.eventId, action: p.action, previousAction: null, prediction: { ...p, realm } });
 
-    const calls: Array<{ content: string; allowed_mentions: unknown }> = [];
+  test("eine Karte pro Aktion, eine kurze Zeile pro Item", () => {
+    const { alerts } = runEngine(ctx, NOW);
+    const [msg, ...rest] = discordMessages(alerts);
+    expect(rest).toHaveLength(0); // ein Realm, eine Nachricht
+    const buy = msg!.embeds[0]!;
+    expect(buy.title).toMatch(/^🟢 KAUFEN · \d+$/);
+    expect(buy.color).toBe(0x2ecc71);
+    const lines = buy.description.split("\n");
+    expect(lines[0]).toStartWith("🗓️ "); // gemeinsamer Anlass einmal oben
+    const pest = lines.find((l) => l.startsWith("**Pestblüte**"))!;
+    expect(pest).toMatch(/^\*\*Pestblüte\*\* · 📈 \+\d+ %( · \S+ → \S+)? · ⏳ 05\.12\. · [●○]{5}$/); // Preis nur mit Scan
+    expect(buy.footer.text).toBe("eu · ⏳ kaufen bis · ●●●○○ Sicherheit");
+    expect(msg!.embeds.at(-1)!.timestamp).toBe(new Date(NOW).toISOString());
+    expect(buy.description).not.toContain("Warum");
+  });
+
+  test("KI: fallender Preis, Peak-Verkauf, Kurzformen", () => {
+    expect(alertLine(ai())).toBe("**Schwarzer Lotus** · 📉 −30 % · 95g → 66g 50s · ⏳ 05.12. · ●●●●○ 🤖");
+    expect(alertLine(ai({ sellTo: null, currentPrice: null }))).toBe("**Schwarzer Lotus** · 📉 −30 % · ⏳ jetzt · ●●●●○ 🤖");
+    expect(alertLine(ai({ source: "rules", impact: 0.6, currentPrice: 22_000, sellTo: "2026-12-19", confidence: 0.1 }))).toBe(
+      "**Schwarzer Lotus** · 💰 Peak · 2g 20s · ⏳ 19.12. · ●○○○○",
+    );
+    expect([1_234_567, 10_000, 4_000, 35].map(shortGold)).toEqual(["123g", "1g", "40s", "35c"]);
+    expect(dots(0)).toBe("●○○○○");
+    expect(dots(1)).toBe("●●●●●");
+
+    const [msg] = discordMessages([alertOf(ai())]);
+    expect(msg!.embeds).toHaveLength(1);
+    expect(msg!.embeds[0]).toMatchObject({ title: "🔴 VERKAUFEN · 1", color: 0xe74c3c });
+    expect(msg!.embeds[0]!.footer.text).toBe("eu-alliance · ⏳ verkaufen bis · ●●●○○ Sicherheit · 🤖 KI");
+  });
+
+  test("höchstens 10 Zeilen, stärkste zuerst, der Rest als Zähler", () => {
+    const many = Array.from({ length: 14 }, (_, i) => alertOf(ai({ itemId: i + 1, itemName: `Item ${i + 1}`, eventName: `Treiber ${i}`, impact: -0.05 * (i + 1) })));
+    const lines = discordMessages(many)[0]!.embeds[0]!.description.split("\n");
+    expect(lines).toHaveLength(11); // verschiedene Treiber: keine Anlass-Zeile
+    expect(lines[0]).toStartWith("**Item 14**");
+    expect(lines.at(-1)).toBe("➕ 4 weitere · im Spiel `/wahp list`");
+  });
+
+  test("schickt Embeds ohne Erwähnungen, eine Nachricht pro Realm", async () => {
+    const { alerts } = runEngine(ctx, NOW);
+    const calls: Array<{ embeds: unknown[]; allowed_mentions: unknown; username: string }> = [];
     const fakeFetch = (async (_url: string, init: RequestInit) => {
       calls.push(JSON.parse(init.body as string));
       return new Response(null, { status: 204 });
     }) as unknown as typeof fetch;
-    await sendDiscord("https://discord.test/webhook", alerts, fakeFetch);
-    expect(calls.length).toBeGreaterThan(0);
-    expect(calls.every((c) => c.content.length <= 2000)).toBe(true);
+    const twoRealms = [...alerts, ...alerts.map((a) => ({ ...a, realm: "eu-alliance" }))];
+    await sendDiscord("https://discord.test/webhook", twoRealms, fakeFetch);
+    expect(calls).toHaveLength(2);
     expect(calls[0]!.allowed_mentions).toEqual({ parse: [] });
+    expect(calls[0]!.username).toBe("AH-Prognose");
+    expect(calls[0]!.embeds.length).toBeGreaterThan(0);
   });
 
-  test("Rate-Limit: wartet bei leerem Kontingent und bei 429, nichts geht verloren", async () => {
-    const alerts = runEngine(ctx, NOW).alerts;
-    const many = Array.from({ length: 12 }, () => alerts).flat(); // mehrere Nachrichten
-    const expected = chunkMessages(many.map(formatAlert)).length;
-    expect(expected).toBeGreaterThan(2);
+  const perRealm = (n: number) => Array.from({ length: n }, (_, i) => alertOf(ai(), `realm-${i}`));
 
+  test("Rate-Limit: wartet bei leerem Kontingent und bei 429, nichts geht verloren", async () => {
+    const many = perRealm(12);
     const sent: string[] = [];
     const waits: number[] = [];
     let n = 0;
@@ -232,32 +277,25 @@ describe("Discord", () => {
       n += 1;
       // Zweite Anfrage wird gebremst, nach jeder fünften ist das Kontingent leer
       if (n === 2) return Response.json({ message: "You are being rate limited.", retry_after: 0.25, global: false }, { status: 429 });
-      sent.push(JSON.parse(init.body as string).content);
+      sent.push(JSON.parse(init.body as string).embeds[0].footer.text);
       const headers = sent.length % 5 === 0 ? { "x-ratelimit-remaining": "0", "x-ratelimit-reset-after": "1.5" } : undefined;
       return new Response(null, { status: 204, headers });
     }) as unknown as typeof fetch;
     await sendDiscord("https://discord.test/webhook", many, fakeFetch, async (ms) => void waits.push(ms));
 
-    expect(sent).toHaveLength(expected);
-    expect(new Set(sent).size).toBe(new Set(chunkMessages(many.map(formatAlert))).size);
+    expect(sent).toHaveLength(12);
+    expect(new Set(sent).size).toBe(12);
     expect(waits[0]).toBe(250);
-    expect(waits.filter((w) => w === 1500)).toHaveLength(Math.floor(expected / 5));
+    expect(waits.filter((w) => w === 1500)).toHaveLength(2);
   });
 
   test("gelöschter Webhook: abbrechen statt jede Nachricht einzeln scheitern lassen", async () => {
-    const alerts = Array.from({ length: 12 }, () => runEngine(ctx, NOW).alerts).flat();
     let n = 0;
     const fakeFetch = (async () => {
       n += 1;
       return Response.json({ message: "Unknown Webhook", code: 10015 }, { status: 404 });
     }) as unknown as typeof fetch;
-    await sendDiscord("https://discord.test/webhook", alerts, fakeFetch, async () => {});
+    await sendDiscord("https://discord.test/webhook", perRealm(12), fakeFetch, async () => {});
     expect(n).toBe(1);
-  });
-
-  test("chunkMessages bleibt unter dem Limit", () => {
-    const chunks = chunkMessages(Array.from({ length: 40 }, () => "x".repeat(300)));
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((c) => c.length <= 1900)).toBe(true);
   });
 });
