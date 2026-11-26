@@ -19,8 +19,30 @@ export const CATEGORIES: Record<CategoryKey, { label: string; emoji: string }> =
   unknown: { label: "Noch ohne Kategorie", emoji: "❔" },
 };
 
-/** Standardansicht und Wochenrückblick */
-export const FOCUS: CategoryKey[] = ["trade", "faction"];
+/** Was eine Ansicht braucht: Kategorie und ob die Handwerks-Fraktion das Item verlangt */
+export interface Categorized {
+  category?: CategoryKey;
+  uses?: string[];
+}
+
+export type ViewKey = "focus" | "trade" | "faction" | "consumable" | "recipe" | "all";
+
+/**
+ * Ansichten für Website, Discord und Addon. Fokus = Handwerkswaren und Ausrüstung,
+ * die eine Verfügung verlangt. Die Verfügungen und Kisten selbst stehen nur unter
+ * Handwerks-Fraktion, zusammen mit allem, was sie verlangen.
+ */
+export const VIEWS: Array<{ key: ViewKey; label: string; emoji: string; test: (x: Categorized) => boolean }> = [
+  { key: "focus", label: "Fokus", emoji: "🎯", test: (x) => x.category === "trade" || (x.category === "gear" && !!x.uses?.length) },
+  { key: "trade", label: "Handwerkswaren", emoji: "🧱", test: (x) => x.category === "trade" },
+  { key: "faction", label: "Handwerks-Fraktion", emoji: "📦", test: (x) => x.category === "faction" || !!x.uses?.length },
+  { key: "consumable", label: "Verbrauchbares", emoji: "🧪", test: (x) => x.category === "consumable" },
+  { key: "recipe", label: "Rezepte", emoji: "📜", test: (x) => x.category === "recipe" },
+  { key: "all", label: "Alle", emoji: "", test: () => true },
+];
+
+/** Standardansicht, Alerts und Wochenrückblick */
+export const inFocus = VIEWS[0]!.test;
 
 // Namen kommen aus dem Client, also in dessen Sprache. Deutsch und Englisch werden erkannt.
 export const WRIT_PREFIXES = ["Handwerksverfügung: ", "Craftsman's Writ: "];
@@ -77,20 +99,20 @@ export interface ItemFacts {
 }
 
 /**
- * Endgültige Kategorie. `needed`: eine Verfügung oder Kiste verlangt das Item. Ausrüstung
- * zählt dann zur Handwerks-Fraktion, sonst bleibt sie "gear" und wird ausgeblendet.
+ * Was das Item ist. "faction" sind die Verfügungen und Kisten selbst. Ob die Fraktion
+ * ein Item verlangt, steht getrennt in `uses`. Ausrüstung ohne `uses` wird ausgeblendet.
  */
-export function categorize(item: ItemFacts, needed: boolean): CategoryKey {
+export function categorize(item: ItemFacts): CategoryKey {
   const name = item.name ?? "";
-  let kind: CategoryKey;
-  if (FACTION_RE.test(name)) kind = "faction";
-  else if (item.classId !== null) kind = kindFromClass(item.classId);
-  else if (item.whKind && item.whKind in CATEGORIES) kind = item.whKind as CategoryKey;
-  else if (RECIPE_RE.test(name)) kind = "recipe";
-  else kind = "unknown";
-  if (kind === "gear" && needed) return "faction";
-  return kind;
+  if (FACTION_RE.test(name)) return "faction";
+  if (item.classId !== null) return kindFromClass(item.classId);
+  if (item.whKind && item.whKind in CATEGORIES) return item.whKind as CategoryKey;
+  if (RECIPE_RE.test(name)) return "recipe";
+  return "unknown";
 }
+
+/** BoE-Ausrüstung, die niemand bei der Fraktion verlangt: ein anderer Markt, fliegt raus */
+export const dropped = (x: Categorized) => x.category === "gear" && !x.uses?.length;
 
 /** Kisten-Tooltip: "- 20 Mithrilbarren" pro Zeile → [{ count: 20, name: "Mithrilbarren" }] */
 export function parseCrateNeeds(text: string): Array<{ count: number; name: string }> {

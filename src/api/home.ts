@@ -2,7 +2,7 @@ import type { Action, Prediction } from "../engine/predict.ts";
 import { byWorth } from "../engine/rank.ts";
 import { predictionsFor } from "../engine/run.ts";
 import { movers, weeklyTop, type Mover } from "../engine/weekly.ts";
-import { categorize, CATEGORIES, FOCUS, type CategoryKey } from "../categories.ts";
+import { categorize, CATEGORIES, dropped, VIEWS } from "../categories.ts";
 import { iconUrl, resolveIcons, wowheadUrl } from "../icons.ts";
 import { dots, usesHint } from "../live/discord.ts";
 import type { AppContext } from "./server.ts";
@@ -48,7 +48,8 @@ function card(p: Prediction, meta: Meta): string {
     ? `<img class="icon" src="${iconUrl(m.icon, "large")}" alt="" loading="lazy" width="48" height="48">`
     : `<span class="icon none">${esc(p.itemName.slice(0, 1))}</span>`;
   const use = usesHint(p);
-  return `<article class="card ${p.action}" data-name="${esc(p.itemName.toLowerCase())}" data-cat="${p.category ?? "unknown"}">
+  const views = VIEWS.filter((v) => v.test(p)).map((v) => v.key).join(" ");
+  return `<article class="card ${p.action}" data-name="${esc(p.itemName.toLowerCase())}" data-views="${views}">
   <a class="item q${quality}" href="${wowheadUrl(p.itemId)}" target="_blank" rel="noopener">${icon}<span class="name">${esc(p.itemName)}</span></a>
   <span class="badge">${badge}</span>
   <div class="price">${price}</div>
@@ -64,15 +65,6 @@ function catTag(p: Prediction): string {
   return c ? `<span class="cat" title="${c.label}">${c.emoji}</span>` : "";
 }
 
-/** Ansichten der Kategorie-Leiste: Fokus zuerst, BoE-Ausrüstung gibt es gar nicht */
-const VIEWS: Array<{ key: string; label: string; cats: CategoryKey[] }> = [
-  { key: "focus", label: "🎯 Fokus", cats: FOCUS },
-  { key: "trade", label: `${CATEGORIES.trade.emoji} ${CATEGORIES.trade.label}`, cats: ["trade"] },
-  { key: "faction", label: `${CATEGORIES.faction.emoji} ${CATEGORIES.faction.label}`, cats: ["faction"] },
-  { key: "consumable", label: `${CATEGORIES.consumable.emoji} ${CATEGORIES.consumable.label}`, cats: ["consumable"] },
-  { key: "recipe", label: `${CATEGORIES.recipe.emoji} ${CATEGORIES.recipe.label}`, cats: ["recipe"] },
-  { key: "all", label: "Alle", cats: ["trade", "faction", "consumable", "recipe", "other", "unknown"] },
-];
 
 function iconTag(itemId: number, name: string, meta: Meta, size = 40): string {
   const m = meta.get(itemId);
@@ -249,14 +241,14 @@ document.querySelectorAll('.all-toggle').forEach(b => b.addEventListener('click'
   if (!all.hidden) all.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }));
 // Kategorie und Suche wirken zusammen auf die Liste aller Signale
-let cats = (document.querySelector('.catbtn[aria-pressed="true"]')?.dataset.cats || '').split(' ').filter(Boolean);
+let view = document.querySelector('.catbtn[aria-pressed="true"]')?.dataset.view || 'all';
 const q = document.querySelector('.search');
 function filter() {
   const v = q ? q.value.trim().toLowerCase() : '';
-  const narrowed = !!v || cats.length > 0;
+  const narrowed = !!v || view !== 'all';
   document.querySelectorAll('.grid').forEach(g => { g.classList.toggle('showall', narrowed); g.parentElement.classList.toggle('searching', narrowed); });
   document.querySelectorAll('.card').forEach(c => {
-    const ok = (!v || c.dataset.name.includes(v)) && (cats.length === 0 || cats.includes(c.dataset.cat));
+    const ok = (!v || c.dataset.name.includes(v)) && (view === 'all' || c.dataset.views.split(' ').includes(view));
     c.classList.toggle('hide', !ok);
   });
 }
@@ -264,7 +256,7 @@ if (q) q.addEventListener('input', filter);
 document.querySelectorAll('.catbtn').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('.catbtn').forEach(o => o.setAttribute('aria-pressed', o === b));
   document.querySelectorAll('.catview').forEach(v => { v.hidden = v.dataset.view !== b.dataset.view; });
-  cats = b.dataset.view === 'all' ? [] : b.dataset.cats.split(' ');
+  view = b.dataset.view;
   filter();
 }));
 filter();
@@ -318,19 +310,19 @@ export function homePage(ctx: AppContext, req: Request, allowed: boolean): Respo
       ]);
       for (const i of market) {
         const f = facts.get(i.itemId);
-        i.kind = categorize({ name: i.name, classId: f?.classId ?? null, whKind: f?.whKind ?? null }, needs.has(i.itemId));
+        i.kind = categorize({ name: i.name, classId: f?.classId ?? null, whKind: f?.whKind ?? null });
+        i.uses = needs.get(i.itemId);
         if (!i.name) i.name = known.get(i.itemId) ?? null;
       }
-      const relevant = market.filter((i) => i.kind !== "gear");
+      const relevant = market.filter((i) => !dropped({ category: i.kind, uses: i.uses }));
       const allMoved = movers(relevant, 50);
       const movedAll = [...allMoved.up, ...allMoved.down];
       const movedMeta = ctx.repo.itemMeta(movedAll.map((m) => m.itemId));
-      const kindOf = new Map(relevant.map((i) => [i.itemId, i.kind ?? "unknown"]));
-      const count = (cats: CategoryKey[]) => predictions.filter((p) => cats.includes(p.category ?? "unknown") && (p.action === "buy" || p.action === "sell")).length;
+      const byId = new Map(relevant.map((i) => [i.itemId, i]));
+      const count = (v: (typeof VIEWS)[number]) => predictions.filter((p) => v.test(p) && (p.action === "buy" || p.action === "sell")).length;
       const views = VIEWS.map((v, i) => {
-        const inView = (p: Prediction) => v.cats.includes(p.category ?? "unknown");
-        const top = weeklyTop(predictions.filter(inView));
-        const moved = movers(relevant.filter((m) => v.cats.includes(kindOf.get(m.itemId) ?? "unknown")));
+        const top = weeklyTop(predictions.filter(v.test));
+        const moved = movers(relevant.filter((m) => v.test({ category: byId.get(m.itemId)?.kind, uses: byId.get(m.itemId)?.uses })));
         return `<div class="catview" data-view="${v.key}"${i === 0 ? "" : " hidden"}>
           <div class="duo">
             ${topList("📈 Gewinner der Woche", "jetzt kaufen", "buy", top.winners, meta)}
@@ -347,7 +339,7 @@ export function homePage(ctx: AppContext, req: Request, allowed: boolean): Respo
           ${brief ? `<span class="chip">📰 <a href="${link("/brief")}">Lagebericht ${when(brief.createdAt)}</a> · ${brief.sources.length} Quellen</span>` : ""}
         </div>
         <nav class="cats" aria-label="Kategorien">${VIEWS.map(
-          (v, i) => `<button class="catbtn" type="button" data-view="${v.key}" data-cats="${v.cats.join(" ")}" aria-pressed="${i === 0}">${v.label}<span class="n">${count(v.cats)}</span></button>`,
+          (v, i) => `<button class="catbtn" type="button" data-view="${v.key}" aria-pressed="${i === 0}">${`${v.emoji} ${v.label}`.trim()}<span class="n">${count(v)}</span></button>`,
         ).join("")}</nav>
         ${views.join("")}
         <button class="all-toggle" type="button">🔎 Alle ${sells.length + buys.length} Signale durchsuchen</button>

@@ -171,7 +171,7 @@ describe("Gewinner und Verlierer der Woche", () => {
     expect(focus.split("📉 Verlierer der Woche")[1]!.split("</section>")[0]).toContain("Gerade nichts.");
     const all = html.split('<div class="catview" data-view="all" hidden>')[1]!.split('<div class="catview"')[0]!;
     expect(all.split("</section>")[0]!.match(/<li class="rank">/g)!.length).toBeGreaterThan(1); // "Alle" zeigt auch die ohne Kategorie
-    expect(html).toContain('<button class="catbtn" type="button" data-view="focus" data-cats="trade faction" aria-pressed="true">🎯 Fokus<span class="n">1</span></button>');
+    expect(html).toContain('<button class="catbtn" type="button" data-view="focus" aria-pressed="true">🎯 Fokus<span class="n">1</span></button>');
     expect(html).toContain('<div class="all" hidden>');
     expect(html.indexOf("Gewinner der Woche")).toBeLessThan(html.indexOf('<div class="all" hidden>'));
     expect(html).not.toContain("Echte Bewegung");
@@ -190,9 +190,9 @@ describe("Gewinner und Verlierer der Woche", () => {
     const by = new Map(preds.map((p) => [p.itemId, p]));
     expect(by.get(4)?.category).toBe("trade");
     expect(by.has(20)).toBe(false); // Rüstung ohne Verwendung: raus
-    expect(by.get(10)).toMatchObject({ category: "faction", uses: ["Handwerksverfügung: Flask A"] });
+    expect(by.get(10)).toMatchObject({ category: "gear", uses: ["Handwerksverfügung: Flask A"] }); // bleibt, weil verlangt
     const lua = toAddonLua(preds, { realm: "eu", generatedAt: NOW });
-    expect(lua).toContain('cat = "faction", uses = "Handwerksverfügung: Flask A"');
+    expect(lua).toContain('cat = "gear", uses = "Handwerksverfügung: Flask A"');
     expect(lua).not.toContain("[20] =");
   });
 
@@ -265,7 +265,7 @@ describe("Startseite", () => {
     const sell = html.split('id="sell"')[1]!.split('id="buy"')[0]!;
     expect(sell).toContain("Gerade nichts."); // vor dem Raid nur Kaufen
     const buy = html.split('id="buy"')[1]!;
-    expect(buy).toContain('<article class="card buy" data-name="pestblüte" data-cat="unknown">');
+    expect(buy).toContain('<article class="card buy" data-name="pestblüte" data-views="all">'); // ohne Kategorie nur unter Alle
     expect(buy).toContain('href="https://www.wowhead.com/forever/de/item=4"');
     expect(buy).toContain('<span class="icon none">P</span>'); // noch kein Icon
     expect(buy).toMatch(/<span class="badge">\+\d+ %<\/span>/);

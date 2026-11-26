@@ -6,7 +6,7 @@ import type { Knowledge } from "../knowledge/types.ts";
 import { AiError, assessChunk, compileBrief, MAX_SEARCHES, priceFor, research, UsageTally } from "./claude.ts";
 import { assessSystem, itemsPrompt, RESEARCH_SYSTEM, researchPrompt, SOURCES_SYSTEM, sourcesPrompt } from "./prompts.ts";
 import { apiModel } from "./provider.ts";
-import { categorize } from "../categories.ts";
+import { categorize, dropped } from "../categories.ts";
 import { movers, type Mover } from "../engine/weekly.ts";
 import { fetchSources, type SourceDoc } from "./sources.ts";
 import type { Brief, MarketItem, Source, StoredAssessment } from "./types.ts";
@@ -72,7 +72,7 @@ export function selectItems(
   const due = items.filter((i) => {
     if (i.quality !== null && i.quality < 1) return false;
     // BoE-Ausrüstung ohne Verwendung bei der Fraktion: anderer Markt, kostet nur Tokens
-    if (i.kind === "gear") return false;
+    if (dropped({ category: i.kind, uses: i.uses })) return false;
     if (opts.all) return true;
     const prev = existing.get(i.itemId);
     if (!prev) return true;
@@ -144,7 +144,7 @@ export async function runAnalysis(deps: AnalyzeDeps, opts: AnalyzeOptions): Prom
   for (const i of market) {
     const f = facts.get(i.itemId);
     i.uses = needs.get(i.itemId);
-    i.kind = categorize({ name: i.name, classId: f?.classId ?? null, whKind: f?.whKind ?? null }, i.uses !== undefined);
+    i.kind = categorize({ name: i.name, classId: f?.classId ?? null, whKind: f?.whKind ?? null });
   }
   const existing = new Map(repo.assessments(opts.realm).map((a) => [a.itemId, a]));
   // --redo up,down: nur Items neu bewerten, deren letzte Bewertung so lautet

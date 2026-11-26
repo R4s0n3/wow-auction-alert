@@ -191,6 +191,7 @@ test("Fenster: /wahp öffnet, Verkaufen nach Gold sortiert, Suche, Taschen, Deta
   withData()
   SlashCmdList.WAHP("")
   assert(WAHPFrame and WAHPFrame:IsShown(), "Fenster offen")
+  ns.ui.catButtons.all:Click() -- die Kiste ist eine Fraktions-Kiste, im Fokus nicht dabei
   local rows = ns.ui.rows
   eq(rows[1].itemId, 13468, "Lotus (-30 % auf 95g) vor der Kiste (-70 % auf 97c)")
   eq(rows[2].itemId, 5)
@@ -240,6 +241,7 @@ test("Fenster: Kategorie-Leiste filtert, Fokus ist Standard, Wahl bleibt gespeic
   local H, ns = fresh()
   WAHP_DATA = { realm = "eu-alliance", generatedAt = os.time(), items = {
     [13468] = { LOTUS }, [5] = { CRATE },
+    [6] = { { action = "sell", name = "Cindercloth Robe", cat = "gear", uses = "Craftsman's Writ: Cindercloth Robe", impact = -0.3, confidence = 0.5, current = 60000, peak = 42000 } },
     [7] = { { action = "sell", name = "Feuerschutztrank", cat = "consumable", impact = -0.2, confidence = 0.5, current = 9000, peak = 7000 } },
     [8] = { { action = "sell", name = "Ohne Kategorie", impact = -0.4, confidence = 0.6, current = 5000, peak = 3000 } },
   } }
@@ -247,16 +249,20 @@ test("Fenster: Kategorie-Leiste filtert, Fokus ist Standard, Wahl bleibt gespeic
   local rows = ns.ui.rows
   eq(ns.uiState.cat, "focus")
   eq(rows[1].itemId, 13468, "Waren")
-  eq(rows[2].itemId, 5, "Fraktion")
-  eq(rows[3]:IsShown(), false, "Verbrauch und ohne Kategorie nicht im Fokus")
+  eq(rows[2].itemId, 6, "Ausrüstung, die eine Verfügung verlangt")
+  eq(rows[3]:IsShown(), false, "Kiste, Verbrauch und ohne Kategorie nicht im Fokus")
   contains(rows[2].name.text, "[Verfügung]")
+  ns.ui.catButtons.faction:Click()
+  eq(rows[1].itemId, 6, "Fraktion: verlangte Ausrüstung")
+  eq(rows[2].itemId, 5, "Fraktion: die Kiste selbst")
+  eq(rows[3]:IsShown(), false)
   ns.ui.catButtons.consumable:Click()
   eq(rows[1].itemId, 7)
   eq(rows[2]:IsShown(), false)
   ns.ui.catButtons.recipe:Click()
   contains(ns.ui.empty.text, "Nichts in dieser Kategorie")
   ns.ui.catButtons.all:Click()
-  eq(rows[4]:IsShown(), true, "Alle zeigt auch die ohne Kategorie")
+  eq(rows[5]:IsShown(), true, "Alle zeigt auch die ohne Kategorie")
   eq(WAHP_DB.settings.category, "all")
 end)
 

@@ -1,4 +1,4 @@
-import { categorize, FOCUS } from "../categories.ts";
+import { categorize, dropped, inFocus } from "../categories.ts";
 import type { Config } from "../config.ts";
 import type { Alert, Repo } from "../db/repo.ts";
 import type { Knowledge } from "../knowledge/types.ts";
@@ -26,8 +26,8 @@ export function categorized(repo: Repo, list: Prediction[]): Prediction[] {
   for (const p of list) {
     const f = facts.get(p.itemId);
     const uses = needs.get(p.itemId);
-    const category = categorize({ name: f?.name ?? p.itemName, classId: f?.classId ?? null, whKind: f?.whKind ?? null }, uses !== undefined);
-    if (category === "gear") continue;
+    const category = categorize({ name: f?.name ?? p.itemName, classId: f?.classId ?? null, whKind: f?.whKind ?? null });
+    if (dropped({ category, uses })) continue;
     out.push({ ...p, category, ...(uses ? { uses } : {}) });
   }
   return out;
@@ -35,13 +35,13 @@ export function categorized(repo: Repo, list: Prediction[]): Prediction[] {
 
 /**
  * Alerts für Discord: Kategorie neu bestimmen (gerade frisch von Wowhead geholt) und nur
- * den Fokus behalten, also Handwerkswaren und Handwerks-Fraktion.
+ * den Fokus behalten, also Handwerkswaren und Ausrüstung, die eine Verfügung verlangt.
  */
 export function focusAlerts(repo: Repo, alerts: Alert[]): Alert[] {
   const fresh = new Map(categorized(repo, alerts.map((a) => a.prediction)).map((p) => [`${p.itemId}:${p.eventId}`, p]));
   return alerts.flatMap((a) => {
     const p = fresh.get(`${a.itemId}:${a.eventId}`);
-    return p && FOCUS.includes(p.category ?? "unknown") ? [{ ...a, prediction: p }] : [];
+    return p && inFocus(p) ? [{ ...a, prediction: p }] : [];
   });
 }
 

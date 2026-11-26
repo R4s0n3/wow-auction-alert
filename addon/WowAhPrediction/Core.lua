@@ -29,19 +29,21 @@ function ns.coinString(copper)
   return ("%dg %ds %dc"):format(math.floor(c / 10000), math.floor(c % 10000 / 100), c % 100)
 end
 
--- Kategorien wie auf dem Server (Feld cat in Data.lua). Fokus = Handwerkswaren + Fraktion.
+-- Ansichten wie auf dem Server (Felder cat und uses in Data.lua). Fokus = Handwerkswaren und
+-- Ausrüstung, die eine Verfügung verlangt. Verfügungen und Kisten selbst nur unter Fraktion.
 ns.CATEGORY_FILTERS = {
-  { key = "focus", label = "Fokus", cats = { trade = true, faction = true } },
-  { key = "trade", label = "Waren", cats = { trade = true } },
-  { key = "faction", label = "Fraktion", cats = { faction = true } },
-  { key = "consumable", label = "Verbrauch", cats = { consumable = true } },
-  { key = "recipe", label = "Rezepte", cats = { recipe = true } },
+  { key = "focus", label = "Fokus", test = function(p) return p.cat == "trade" or (p.cat == "gear" and p.uses ~= nil) end },
+  { key = "trade", label = "Waren", test = function(p) return p.cat == "trade" end },
+  { key = "faction", label = "Fraktion", test = function(p) return p.cat == "faction" or p.uses ~= nil end },
+  { key = "consumable", label = "Verbrauch", test = function(p) return p.cat == "consumable" end },
+  { key = "recipe", label = "Rezepte", test = function(p) return p.cat == "recipe" end },
   { key = "all", label = "Alle" },
 }
 
+-- Filterfunktion zur Ansicht, nil = alles
 function ns.categoryFilter(key)
   for _, c in ipairs(ns.CATEGORY_FILTERS) do
-    if c.key == key then return c.cats end
+    if c.key == key then return c.test end
   end
 end
 
@@ -89,16 +91,16 @@ end
 local BAG_ORDER = { sell = 1, hold = 2, avoid = 3, buy = 4, watch = 5 }
 
 -- Listen fürs Fenster und /wahp list. tab: "sell", "buy" oder "bags" (was du besitzt),
--- query: Teil des Namens, cats: erlaubte Kategorien (nil = alle).
+-- query: Teil des Namens, filter: Funktion aus ns.categoryFilter (nil = alle).
 -- Ergebnis: { itemId, p, count }, Wertvollstes zuerst.
-function ns.collect(tab, query, cats)
+function ns.collect(tab, query, filter)
   local data = WAHP_DATA
   local out = {}
   if not data or not data.items then return out end
   query = query and query ~= "" and string.lower(query) or nil
   for itemId, preds in pairs(data.items) do
     local p = preds[1]
-    local catOk = not cats or cats[p and p.cat or "unknown"]
+    local catOk = p ~= nil and (not filter or filter(p))
     if p and catOk and (not query or string.find(string.lower(p.name or ""), query, 1, true)) then
       if tab == "bags" then
         local count = ns.itemCount(itemId)

@@ -1,6 +1,6 @@
 // Wochenrückblick in Discord: jeden Montag um 9 Uhr (Berlin) die 10 Gewinner und
 // die 10 Verlierer der Woche. Der Server prüft das bei jedem Engine-Durchlauf.
-import { FOCUS } from "./categories.ts";
+import { inFocus } from "./categories.ts";
 import type { Config } from "./config.ts";
 import type { Repo } from "./db/repo.ts";
 import { predictionsFor } from "./engine/run.ts";
@@ -42,8 +42,8 @@ export interface DigestDeps {
 export async function sendWeeklyDigest(deps: DigestDeps, now = Date.now(), record = true): Promise<number> {
   const realm = deps.repo.overview()[0]?.realm;
   if (!realm || !deps.config.discordWebhookUrl) return 0;
-  // Nur der Fokus: Handwerkswaren und Handwerks-Fraktion
-  const top = weeklyTop(predictionsFor(deps, realm, now).filter((p) => FOCUS.includes(p.category ?? "unknown")));
+  // Nur der Fokus: Handwerkswaren und Ausrüstung, die eine Verfügung verlangt
+  const top = weeklyTop(predictionsFor(deps, realm, now).filter(inFocus));
   const ids = [...top.winners, ...top.losers].map((p) => p.itemId);
   if (ids.length === 0) return 0;
   await Promise.race([resolveIcons(deps.repo, ids, { max: 20, fetchImpl: deps.fetchImpl }), Bun.sleep(15_000)]).catch(() => {});

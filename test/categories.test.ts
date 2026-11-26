@@ -3,7 +3,7 @@ import { selectItems } from "../src/ai/analyze.ts";
 import { itemsPrompt } from "../src/ai/prompts.ts";
 import { htmlToText } from "../src/ai/sources.ts";
 import type { MarketItem } from "../src/ai/types.ts";
-import { categorize, isCrate, kindFromClass, kindFromTooltip, parseCrateNeeds, writTarget } from "../src/categories.ts";
+import { categorize, dropped, inFocus, isCrate, kindFromClass, kindFromTooltip, parseCrateNeeds, VIEWS, writTarget, type CategoryKey } from "../src/categories.ts";
 import { openDatabase } from "../src/db/database.ts";
 import { Repo } from "../src/db/repo.ts";
 import { extractScans } from "../src/companion/wow.ts";
@@ -35,13 +35,26 @@ describe("Kategorien", () => {
   });
 
   test("Reihenfolge: Fraktion vor Klasse vor Tooltip vor Name, Ausrüstung nur mit Verwendung", () => {
-    expect(categorize({ name: "Abgefangene Kiste: Erz des Experten", classId: 7, whKind: null }, false)).toBe("faction");
-    expect(categorize({ name: "Arkanitbarren", classId: 7, whKind: "gear" }, false)).toBe("trade"); // Klasse schlägt Tooltip
-    expect(categorize({ name: "Löwenherzhelm", classId: 4, whKind: null }, false)).toBe("gear");
-    expect(categorize({ name: "Aschenstoffrobe", classId: 4, whKind: null }, true)).toBe("faction"); // eine Verfügung verlangt sie
-    expect(categorize({ name: "Pestblüte", classId: null, whKind: "trade" }, false)).toBe("trade");
-    expect(categorize({ name: "Rezept: Manatrank", classId: null, whKind: null }, false)).toBe("recipe");
-    expect(categorize({ name: "Unbekanntes", classId: null, whKind: null }, false)).toBe("unknown");
+    expect(categorize({ name: "Abgefangene Kiste: Erz des Experten", classId: 7, whKind: null })).toBe("faction");
+    expect(categorize({ name: "Arkanitbarren", classId: 7, whKind: "gear" })).toBe("trade"); // Klasse schlägt Tooltip
+    expect(categorize({ name: "Löwenherzhelm", classId: 4, whKind: null })).toBe("gear");
+    expect(categorize({ name: "Aschenstoffrobe", classId: 4, whKind: null })).toBe("gear"); // was sie ist, verlangt wird extra
+    expect(dropped({ category: "gear" })).toBe(true);
+    expect(dropped({ category: "gear", uses: ["Craftsman's Writ: Cindercloth Robe"] })).toBe(false);
+    expect(categorize({ name: "Pestblüte", classId: null, whKind: "trade" })).toBe("trade");
+    expect(categorize({ name: "Rezept: Manatrank", classId: null, whKind: null })).toBe("recipe");
+    expect(categorize({ name: "Unbekanntes", classId: null, whKind: null })).toBe("unknown");
+  });
+
+  test("Ansichten: Verfügungen nur unter Handwerks-Fraktion, verlangte Ausrüstung im Fokus", () => {
+    const views = (x: { category: CategoryKey; uses?: string[] }) => VIEWS.filter((v) => v.test(x)).map((v) => v.key);
+    expect(views({ category: "trade" })).toEqual(["focus", "trade", "all"]);
+    expect(views({ category: "trade", uses: ["Waylaid Crate: Expert Ingots"] })).toEqual(["focus", "trade", "faction", "all"]);
+    expect(views({ category: "faction" })).toEqual(["faction", "all"]); // die Verfügung selbst
+    expect(views({ category: "gear", uses: ["Craftsman's Writ: Cindercloth Robe"] })).toEqual(["focus", "faction", "all"]);
+    expect(views({ category: "consumable", uses: ["Craftsman's Writ: Elixir of Defense"] })).toEqual(["faction", "consumable", "all"]);
+    expect(views({ category: "recipe" })).toEqual(["recipe", "all"]);
+    expect(inFocus({ category: "faction" })).toBe(false);
   });
 
   test("englischer Client: Verfügungen, Kisten, Rezepte und Tooltip-Regeln", () => {
@@ -49,9 +62,9 @@ describe("Kategorien", () => {
     expect(writTarget("Handwerksverfügung: Aschenstoffrobe")).toBe("Aschenstoffrobe");
     expect(writTarget("Cindercloth Robe")).toBeNull();
     expect(isCrate("Waylaid Crate: Expert Ingots")).toBe(true);
-    expect(categorize({ name: "Waylaid Crate: Expert Ingots", classId: null, whKind: null }, false)).toBe("faction");
-    expect(categorize({ name: "Sealed Craftsman's Writ", classId: null, whKind: null }, false)).toBe("faction");
-    expect(categorize({ name: "Blueprint: Molten Foundry", classId: null, whKind: null }, false)).toBe("recipe");
+    expect(categorize({ name: "Waylaid Crate: Expert Ingots", classId: null, whKind: null })).toBe("faction");
+    expect(categorize({ name: "Sealed Craftsman's Writ", classId: null, whKind: null })).toBe("faction");
+    expect(categorize({ name: "Blueprint: Molten Foundry", classId: null, whKind: null })).toBe("recipe");
     expect(kindFromTooltip("Stormshroud Armor", "Binds when equipped\nChest Leather\nDurability 100 / 100")).toBe("gear");
     expect(kindFromTooltip("Plaguebloom", "Crafting Reagent\nMax Stack: 20")).toBe("trade");
     expect(kindFromTooltip("Runecloth Bag", "14 Slot Bag")).toBe("other");
@@ -90,7 +103,7 @@ describe("Kategorien in Analyse, Prompt und Discord", () => {
   test("BoE-Ausrüstung kostet keine KI-Tokens mehr, Ausrüstung für Verfügungen schon", () => {
     const list = [
       item({ itemId: 1, name: "Löwenherzhelm", kind: "gear", price: 6_890_000 }),
-      item({ itemId: 2, name: "Aschenstoffrobe", kind: "faction", uses: ["Handwerksverfügung: Aschenstoffrobe"] }),
+      item({ itemId: 2, name: "Aschenstoffrobe", kind: "gear", uses: ["Handwerksverfügung: Aschenstoffrobe"] }),
       item({ itemId: 3, name: "Mithrilbarren", kind: "trade" }),
     ];
     const picked = selectItems(list, new Map(), { reassessHours: 72, now: 0 }).map((i) => i.itemId).sort();
@@ -100,11 +113,11 @@ describe("Kategorien in Analyse, Prompt und Discord", () => {
   test("der Prompt nennt Kategorie und die Nachfrage der Handwerks-Fraktion", () => {
     const prompt = itemsPrompt([
       item({ itemId: 3860, name: "Mithrilbarren", kind: "trade", uses: ["Abgefangene Kiste: Barren des Experten"] }),
-      item({ itemId: 10042, name: "Aschenstoffrobe", kind: "faction", uses: ["Handwerksverfügung: Aschenstoffrobe"] }),
+      item({ itemId: 10042, name: "Aschenstoffrobe", kind: "gear", uses: ["Handwerksverfügung: Aschenstoffrobe"] }),
       item({ itemId: 5, name: "Alt", kind: "unknown", category: "Handwerkswaren/Kräuter" }),
     ]);
     expect(prompt).toContain("3860 | Mithrilbarren | Gewöhnlich | Handwerkswaren, für Abgefangene Kisten |");
-    expect(prompt).toContain("10042 | Aschenstoffrobe | Gewöhnlich | Handwerks-Fraktion, für Handwerksverfügung |");
+    expect(prompt).toContain("10042 | Aschenstoffrobe | Gewöhnlich | Ausrüstung, für Handwerksverfügung |");
     expect(prompt).toContain("5 | Alt | Gewöhnlich | Handwerkswaren/Kräuter |"); // ohne Kategorie: Text aus dem Client
   });
 
