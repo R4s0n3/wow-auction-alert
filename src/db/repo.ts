@@ -1,3 +1,4 @@
+import { writTarget } from "../categories.ts";
 import type { Database } from "bun:sqlite";
 import type { Assessment, Brief, MarketItem, Source, StoredAssessment } from "../ai/types.ts";
 import type { Action, Prediction, PriceProvider, PriceStats } from "../engine/predict.ts";
@@ -164,13 +165,17 @@ export class Repo {
     })();
   }
 
+  /** Alle Abgefangenen Kisten (deutscher oder englischer Name) */
+  allCrates(): number[] {
+    return (
+      this.db.query(`SELECT item_id AS id FROM items WHERE name LIKE 'Abgefangene Kiste: %' OR name LIKE 'Waylaid Crate: %'`).all() as Array<{ id: number }>
+    ).map((r) => r.id);
+  }
+
   /** Abgefangene Kisten, deren Inhalt noch unbekannt ist */
   cratesWithoutNeeds(): number[] {
-    return (
-      this.db
-        .query(`SELECT item_id AS id FROM items WHERE name LIKE 'Abgefangene Kiste: %' AND item_id NOT IN (SELECT source_item_id FROM faction_needs)`)
-        .all() as Array<{ id: number }>
-    ).map((r) => r.id);
+    const known = new Set((this.db.query(`SELECT DISTINCT source_item_id AS id FROM faction_needs`).all() as Array<{ id: number }>).map((r) => r.id));
+    return this.allCrates().filter((id) => !known.has(id));
   }
 
   /**
@@ -191,7 +196,10 @@ export class Repo {
       if (!list.includes(source)) list.push(source);
       out.set(id, list);
     };
-    for (const name of byName.keys()) if (name.startsWith("Handwerksverfügung: ")) add(name.slice("Handwerksverfügung: ".length), name);
+    for (const name of byName.keys()) {
+      const target = writTarget(name);
+      if (target) add(target, name);
+    }
     for (const r of this.db
       .query(`SELECT n.need_name AS need, i.name AS source FROM faction_needs n JOIN items i ON i.item_id = n.source_item_id`)
       .all() as Array<{ need: string; source: string }>) {

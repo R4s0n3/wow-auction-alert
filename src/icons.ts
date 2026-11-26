@@ -3,10 +3,11 @@
 // Tooltip-Text) und bei Abgefangenen Kisten, womit man sie füllt. Die Bilder kommen
 // vom Wowhead-CDN. Ergebnisse landen in der items-Tabelle, gefragt wird nur einmal.
 import { htmlToText } from "./ai/sources.ts";
-import { CRATE_PREFIX, kindFromTooltip, parseCrateNeeds } from "./categories.ts";
+import { isCrate, kindFromTooltip, parseCrateNeeds } from "./categories.ts";
 import type { Repo } from "./db/repo.ts";
 
-const TOOLTIP = (itemId: number) => `https://nether.wowhead.com/forever/tooltip/item/${itemId}?locale=3`;
+/** locale 3 = Deutsch (Kategorie-Regeln), 0 = Englisch (Kisteninhalt für englische Clients) */
+const TOOLTIP = (itemId: number, locale = 3) => `https://nether.wowhead.com/forever/tooltip/item/${itemId}?locale=${locale}`;
 const ICON_RE = /^[a-z0-9_-]{1,100}$/i;
 /** Items ohne Icon (unbekannt bei Wowhead) erst nach einer Woche nochmal fragen */
 const RECHECK_MS = 7 * 86_400_000;
@@ -27,10 +28,10 @@ export interface ItemLookup {
 }
 
 /** Fragt Wowhead nach einem Item. null bei Netzwerkfehler (dann später nochmal), sonst das Ergebnis, auch wenn leer. */
-export async function lookupItem(itemId: number, fetchImpl: typeof fetch = fetch): Promise<ItemLookup | null> {
+export async function lookupItem(itemId: number, fetchImpl: typeof fetch = fetch, locale = 3): Promise<ItemLookup | null> {
   let res: Response;
   try {
-    res = await fetchImpl(TOOLTIP(itemId), { headers: { accept: "application/json", "user-agent": "wahp-server/1.0" } });
+    res = await fetchImpl(TOOLTIP(itemId, locale), { headers: { accept: "application/json", "user-agent": "wahp-server/1.0" } });
   } catch {
     return null;
   }
@@ -44,7 +45,7 @@ export async function lookupItem(itemId: number, fetchImpl: typeof fetch = fetch
     quality: Number.isInteger(d?.quality) && (d!.quality as number) >= 0 && (d!.quality as number) <= 8 ? (d!.quality as number) : null,
     name,
     kind: text ? kindFromTooltip(name ?? "", text) : null,
-    crateNeeds: name?.startsWith(CRATE_PREFIX) ? parseCrateNeeds(text) : [],
+    crateNeeds: name && isCrate(name) ? parseCrateNeeds(text) : [],
   };
 }
 
@@ -72,7 +73,12 @@ export async function resolveItemMeta(
       const info = await lookupItem(itemId, opts.fetchImpl);
       if (!info) continue; // Netz weg: beim nächsten Durchlauf nochmal
       repo.setItemMeta(itemId, { icon: info.icon, quality: info.quality, name: info.name, kind: info.kind }, now);
-      if (info.crateNeeds.length > 0) repo.setCrateNeeds(itemId, info.crateNeeds);
+      if (info.crateNeeds.length > 0) {
+        // Kisteninhalt auch auf Englisch, damit er zu Namen aus einem englischen Client passt
+        const en = await lookupItem(itemId, opts.fetchImpl, 0);
+        const names = new Set(info.crateNeeds.map((n) => n.name));
+        repo.setCrateNeeds(itemId, [...info.crateNeeds, ...(en?.crateNeeds ?? []).filter((n) => !names.has(n.name))]);
+      }
       if (info.icon) found += 1;
     }
   });

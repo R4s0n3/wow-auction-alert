@@ -22,10 +22,24 @@ export const CATEGORIES: Record<CategoryKey, { label: string; emoji: string }> =
 /** Standardansicht und Wochenrückblick */
 export const FOCUS: CategoryKey[] = ["trade", "faction"];
 
-export const WRIT_PREFIX = "Handwerksverfügung: ";
-export const CRATE_PREFIX = "Abgefangene Kiste: ";
-const FACTION_RE = /^(Handwerksverfügung|Abgefangene Kiste|Versiegelte Verfügung)/;
-const RECIPE_RE = /^((Muster|Rezept|Bauplan|Pläne|Formel|Handbuch|Kodex|Schematic|Schema|Pattern|Recipe|Plans|Formula):|(Obere|Untere) Hälfte von)/;
+// Namen kommen aus dem Client, also in dessen Sprache. Deutsch und Englisch werden erkannt.
+export const WRIT_PREFIXES = ["Handwerksverfügung: ", "Craftsman's Writ: "];
+export const CRATE_PREFIXES = ["Abgefangene Kiste: ", "Waylaid Crate: "];
+/** Alte Namen, falls jemand sie importiert */
+export const WRIT_PREFIX = WRIT_PREFIXES[0]!;
+export const CRATE_PREFIX = CRATE_PREFIXES[0]!;
+const FACTION_RE = /^(Handwerksverfügung|Abgefangene Kiste|Versiegelte Verfügung|Craftsman's Writ|Waylaid Crate|Sealed Craftsman's Writ)/;
+const RECIPE_RE =
+  /^((Muster|Rezept|Bauplan|Pläne|Formel|Handbuch|Kodex|Schema|Pattern|Recipe|Plans|Formula|Schematic|Blueprint|Manual|Design):|(Obere|Untere) Hälfte von|(Top|Bottom) Half of)/;
+
+export const isWrit = (name: string) => WRIT_PREFIXES.some((p) => name.startsWith(p));
+export const isCrate = (name: string) => CRATE_PREFIXES.some((p) => name.startsWith(p));
+
+/** "Craftsman's Writ: Cindercloth Robe" → "Cindercloth Robe": das Item, das die Verfügung verlangt */
+export function writTarget(name: string): string | null {
+  const prefix = WRIT_PREFIXES.find((p) => name.startsWith(p));
+  return prefix ? name.slice(prefix.length) : null;
+}
 
 /** WoW-Itemklassen (classID), gleich in allen Sprachen */
 export function kindFromClass(classId: number): CategoryKey {
@@ -44,15 +58,15 @@ export function kindFromClass(classId: number): CategoryKey {
   }
 }
 
-/** Kategorie aus dem (deutschen) Wowhead-Tooltip-Text, null wenn nichts Eindeutiges drinsteht */
+/** Kategorie aus dem Wowhead-Tooltip-Text (deutsch oder englisch), null wenn nichts Eindeutiges drinsteht */
 export function kindFromTooltip(name: string, text: string): CategoryKey | null {
   if (FACTION_RE.test(name)) return "faction";
   if (RECIPE_RE.test(name)) return "recipe";
-  if (/Pl(ä|a)tz/.test(text) && /Tasche|Behälter|Köcher|Beutel/.test(text)) return "other";
-  if (/Haltbarkeit \d+ ?\/ ?\d+|Wird beim Anlegen gebunden/.test(text)) return "gear";
-  if (/Handwerksmaterial/.test(text)) return "trade";
-  if (/Benutzen:/.test(text)) return "consumable";
-  if (/Dieser Gegenstand startet eine Quest/.test(text)) return "other";
+  if ((/Pl(ä|a)tz/.test(text) && /Tasche|Behälter|Köcher|Beutel/.test(text)) || /\d+ Slot (Bag|Container|Quiver|Ammo Pouch)/.test(text)) return "other";
+  if (/Haltbarkeit \d+ ?\/ ?\d+|Durability \d+ ?\/ ?\d+|Wird beim Anlegen gebunden|Binds when equipped/.test(text)) return "gear";
+  if (/Handwerksmaterial|Crafting Reagent/.test(text)) return "trade";
+  if (/Benutzen:|Use:/.test(text)) return "consumable";
+  if (/Dieser Gegenstand startet eine Quest|This Item Begins a Quest/.test(text)) return "other";
   return null;
 }
 

@@ -23,9 +23,12 @@ async function warmIcons(itemIds: number[]): Promise<void> {
   if (fetchingIcons || itemIds.length === 0) return;
   fetchingIcons = true;
   try {
-    // Abgefangene Kisten: Inhalt aus dem Tooltip, damit klar ist, welche Waren sie verlangen
-    const crates = repo.cratesWithoutNeeds();
-    if (crates.length > 0) await resolveIcons(repo, crates, { max: 40, force: true });
+    // Abgefangene Kisten: Inhalt aus dem Tooltip (deutsch und englisch), damit klar ist, welche Waren sie verlangen.
+    // Einmalig alle neu lesen, die nur den deutschen Inhalt haben (vor der zweisprachigen Version).
+    const rereadAll = repo.getMeta("crate_needs_version") !== "2";
+    const crates = rereadAll ? repo.allCrates() : repo.cratesWithoutNeeds();
+    if (crates.length > 0) await resolveIcons(repo, crates, { max: 60, force: true });
+    if (rereadAll) repo.setMeta("crate_needs_version", "2");
     const found = await resolveIcons(repo, itemIds, { max: 300 });
     if (found > 0) console.log(`[icons] ${found} Icons von Wowhead geholt`);
   } catch (err) {

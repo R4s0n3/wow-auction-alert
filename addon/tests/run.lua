@@ -180,7 +180,7 @@ local LOTUS = {
 local CRATE = {
   action = "sell", src = "ai", name = "Abgefangene Kiste", event = "Writs brechen ein", impact = -0.7,
   confidence = 0.65, netUpside = -0.72, current = 97, peak = 29, sellTo = "2026-11-28", why = "Händlerware ohne Abnehmer.", cat = "faction",
-  uses = "Handwerksverfügung: Kiste",
+  uses = "Craftsman's Writ: Kiste",
 }
 local function withData()
   WAHP_DATA = { realm = "eu-alliance", generatedAt = os.time(), items = { [13466] = { PRED }, [13468] = { LOTUS }, [5] = { CRATE } } }
@@ -233,7 +233,7 @@ test("Fenster: /wahp öffnet, Verkaufen nach Gold sortiert, Suche, Taschen, Deta
   eq(ns.ui.details.link.text, "https://www.wowhead.com/forever/de/item=5")
   rows[1].scripts.OnEnter(rows[1])
   eq(GameTooltip.item, 5, "Item-Tooltip beim Drüberfahren")
-  contains(ns.ui.details.why.text, "Verlangt von: Handwerksverfügung: Kiste")
+  contains(ns.ui.details.why.text, "Verlangt von: Craftsman's Writ: Kiste")
 end)
 
 test("Fenster: Kategorie-Leiste filtert, Fokus ist Standard, Wahl bleibt gespeichert", function()

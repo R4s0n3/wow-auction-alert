@@ -3,7 +3,9 @@ import { selectItems } from "../src/ai/analyze.ts";
 import { itemsPrompt } from "../src/ai/prompts.ts";
 import { htmlToText } from "../src/ai/sources.ts";
 import type { MarketItem } from "../src/ai/types.ts";
-import { categorize, kindFromClass, kindFromTooltip, parseCrateNeeds } from "../src/categories.ts";
+import { categorize, isCrate, kindFromClass, kindFromTooltip, parseCrateNeeds, writTarget } from "../src/categories.ts";
+import { openDatabase } from "../src/db/database.ts";
+import { Repo } from "../src/db/repo.ts";
 import { extractScans } from "../src/companion/wow.ts";
 import type { Prediction } from "../src/engine/predict.ts";
 import { usesHint } from "../src/live/discord.ts";
@@ -40,6 +42,37 @@ describe("Kategorien", () => {
     expect(categorize({ name: "Pestblüte", classId: null, whKind: "trade" }, false)).toBe("trade");
     expect(categorize({ name: "Rezept: Manatrank", classId: null, whKind: null }, false)).toBe("recipe");
     expect(categorize({ name: "Unbekanntes", classId: null, whKind: null }, false)).toBe("unknown");
+  });
+
+  test("englischer Client: Verfügungen, Kisten, Rezepte und Tooltip-Regeln", () => {
+    expect(writTarget("Craftsman's Writ: Cindercloth Robe")).toBe("Cindercloth Robe");
+    expect(writTarget("Handwerksverfügung: Aschenstoffrobe")).toBe("Aschenstoffrobe");
+    expect(writTarget("Cindercloth Robe")).toBeNull();
+    expect(isCrate("Waylaid Crate: Expert Ingots")).toBe(true);
+    expect(categorize({ name: "Waylaid Crate: Expert Ingots", classId: null, whKind: null }, false)).toBe("faction");
+    expect(categorize({ name: "Sealed Craftsman's Writ", classId: null, whKind: null }, false)).toBe("faction");
+    expect(categorize({ name: "Blueprint: Molten Foundry", classId: null, whKind: null }, false)).toBe("recipe");
+    expect(kindFromTooltip("Stormshroud Armor", "Binds when equipped\nChest Leather\nDurability 100 / 100")).toBe("gear");
+    expect(kindFromTooltip("Plaguebloom", "Crafting Reagent\nMax Stack: 20")).toBe("trade");
+    expect(kindFromTooltip("Runecloth Bag", "14 Slot Bag")).toBe("other");
+    expect(kindFromTooltip("Mana Potion", "Use: Restores 700 mana.")).toBe("consumable");
+  });
+
+  test("englischer Client: die Fraktion findet ihre Items über die englischen Namen", () => {
+    const repo = new Repo(openDatabase(":memory:"));
+    repo.insertScan("eu", "t", 1_795_000_000_000, [
+      { itemId: 264114, minBuyout: 900, quantity: 8, name: "Craftsman's Writ: Cindercloth Robe" },
+      { itemId: 10042, minBuyout: 60000, quantity: 2, name: "Cindercloth Robe", classId: 4 },
+      { itemId: 248709, minBuyout: 5000, quantity: 3, name: "Waylaid Crate: Expert Ingots" },
+      { itemId: 3860, minBuyout: 3000, quantity: 200, name: "Mithril Bar", classId: 7 },
+    ]);
+    // Kisteninhalt kam deutsch und englisch von Wowhead
+    repo.setCrateNeeds(248709, [{ count: 20, name: "Mithrilbarren" }, { count: 20, name: "Mithril Bar" }]);
+    const needs = repo.factionNeeds();
+    expect(needs.get(10042)).toEqual(["Craftsman's Writ: Cindercloth Robe"]);
+    expect(needs.get(3860)).toEqual(["Waylaid Crate: Expert Ingots"]);
+    expect(usesHint({ uses: needs.get(3860) } as Prediction)).toBe("📦 für Kisten");
+    expect(usesHint({ uses: needs.get(10042) } as Prediction)).toBe("📜 für Verfügung");
   });
 
   test("Kisten-Inhalt aus dem Tooltip", () => {

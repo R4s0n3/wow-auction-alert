@@ -1,7 +1,7 @@
 import type { Alert } from "../db/repo.ts";
 import type { Prediction } from "../engine/predict.ts";
 import { byWorth } from "../engine/rank.ts";
-import { CATEGORIES, CRATE_PREFIX, WRIT_PREFIX } from "../categories.ts";
+import { CATEGORIES, isCrate, isWrit } from "../categories.ts";
 import { iconUrl, wowheadUrl } from "../icons.ts";
 
 // Eine Nachricht pro Realm und Durchlauf. Darin eine Karte pro Item, mit Icon als
@@ -84,8 +84,8 @@ export function itemLines(p: Prediction): [string, string] {
 /** "📜 für Verfügung" / "📦 für Kisten": wenn die Handwerks-Fraktion das Item verlangt */
 export function usesHint(p: Prediction): string | null {
   const uses = p.uses ?? [];
-  const writ = uses.some((u) => u.startsWith(WRIT_PREFIX));
-  const crate = uses.some((u) => u.startsWith(CRATE_PREFIX));
+  const writ = uses.some(isWrit);
+  const crate = uses.some(isCrate);
   if (writ && crate) return "📜📦 für Verfügung & Kisten";
   if (writ) return "📜 für Verfügung";
   if (crate) return "📦 für Kisten";

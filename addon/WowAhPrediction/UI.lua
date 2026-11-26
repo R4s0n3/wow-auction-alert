@@ -101,8 +101,8 @@ end
 -- "[Verfügung]" / "[Kisten]": die Handwerks-Fraktion verlangt das Item (Feld uses in Data.lua)
 function ns.usesTag(p)
   local uses = p.uses or ""
-  local writ = string.find(uses, "Handwerksverfügung", 1, true) ~= nil
-  local crate = string.find(uses, "Abgefangene Kiste", 1, true) ~= nil
+  local writ = string.find(uses, "Handwerksverfügung", 1, true) ~= nil or string.find(uses, "Craftsman's Writ", 1, true) ~= nil
+  local crate = string.find(uses, "Abgefangene Kiste", 1, true) ~= nil or string.find(uses, "Waylaid Crate", 1, true) ~= nil
   if writ and crate then return "  |cffe0a25a[Verfügung, Kisten]|r" end
   if writ then return "  |cffe0a25a[Verfügung]|r" end
   if crate then return "  |cffe0a25a[Kisten]|r" end
