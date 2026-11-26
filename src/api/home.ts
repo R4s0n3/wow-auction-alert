@@ -2,8 +2,9 @@ import type { Action, Prediction } from "../engine/predict.ts";
 import { byWorth } from "../engine/rank.ts";
 import { predictionsFor } from "../engine/run.ts";
 import { movers, weeklyTop, type Mover } from "../engine/weekly.ts";
+import { categorize, CATEGORIES, FOCUS, type CategoryKey } from "../categories.ts";
 import { iconUrl, resolveIcons, wowheadUrl } from "../icons.ts";
-import { dots } from "../live/discord.ts";
+import { dots, usesHint } from "../live/discord.ts";
 import type { AppContext } from "./server.ts";
 
 const esc = (s: string) =>
@@ -46,14 +47,32 @@ function card(p: Prediction, meta: Meta): string {
   const icon = m?.icon
     ? `<img class="icon" src="${iconUrl(m.icon, "large")}" alt="" loading="lazy" width="48" height="48">`
     : `<span class="icon none">${esc(p.itemName.slice(0, 1))}</span>`;
-  return `<article class="card ${p.action}" data-name="${esc(p.itemName.toLowerCase())}">
+  const use = usesHint(p);
+  return `<article class="card ${p.action}" data-name="${esc(p.itemName.toLowerCase())}" data-cat="${p.category ?? "unknown"}">
   <a class="item q${quality}" href="${wowheadUrl(p.itemId)}" target="_blank" rel="noopener">${icon}<span class="name">${esc(p.itemName)}</span></a>
   <span class="badge">${badge}</span>
   <div class="price">${price}</div>
-  <div class="meta">${deadline}<span class="dots" title="Sicherheit ${Math.round(p.confidence * 100)} %">${dots(p.confidence)}</span>${p.source === "ai" ? `<span class="ai" title="KI-Prognose">🤖</span>` : ""}</div>
-  <p class="why"><b>${esc(p.eventName)}</b> ${esc(why)}</p>
+  <div class="meta">${catTag(p)}${deadline}<span class="dots" title="Sicherheit ${Math.round(p.confidence * 100)} %">${dots(p.confidence)}</span>${p.source === "ai" ? `<span class="ai" title="KI-Prognose">🤖</span>` : ""}</div>
+  ${use ? `<div class="use" title="${esc((p.uses ?? []).join(", "))}">${esc(use)}</div>` : ""}
+  <p class="why"><b>${esc(p.eventName)}</b> ${esc(why)}${p.uses?.length ? `<br><span class="needs">Verlangt von: ${esc(p.uses.join(", "))}</span>` : ""}</p>
 </article>`;
 }
+
+/** Kleines Kategorie-Symbol mit Name als Tooltip */
+function catTag(p: Prediction): string {
+  const c = p.category && p.category !== "unknown" ? CATEGORIES[p.category] : null;
+  return c ? `<span class="cat" title="${c.label}">${c.emoji}</span>` : "";
+}
+
+/** Ansichten der Kategorie-Leiste: Fokus zuerst, BoE-Ausrüstung gibt es gar nicht */
+const VIEWS: Array<{ key: string; label: string; cats: CategoryKey[] }> = [
+  { key: "focus", label: "🎯 Fokus", cats: FOCUS },
+  { key: "trade", label: `${CATEGORIES.trade.emoji} ${CATEGORIES.trade.label}`, cats: ["trade"] },
+  { key: "faction", label: `${CATEGORIES.faction.emoji} ${CATEGORIES.faction.label}`, cats: ["faction"] },
+  { key: "consumable", label: `${CATEGORIES.consumable.emoji} ${CATEGORIES.consumable.label}`, cats: ["consumable"] },
+  { key: "recipe", label: `${CATEGORIES.recipe.emoji} ${CATEGORIES.recipe.label}`, cats: ["recipe"] },
+  { key: "all", label: "Alle", cats: ["trade", "faction", "consumable", "recipe", "other", "unknown"] },
+];
 
 function iconTag(itemId: number, name: string, meta: Meta, size = 40): string {
   const m = meta.get(itemId);
@@ -79,8 +98,8 @@ function topList(title: string, hint: string, action: Action, list: Prediction[]
       <span class="pos">${i + 1}</span>
       <a class="item q${meta.get(p.itemId)?.quality ?? 1}" href="${wowheadUrl(p.itemId)}" target="_blank" rel="noopener">${iconTag(p.itemId, p.itemName, meta)}<span class="name">${esc(p.itemName)}</span></a>
       <span class="badge">${badge}</span>
-      <div class="sub"><span class="price">${price}</span>${deadline ? `<span>${deadline}</span>` : ""}<span class="dots" title="Sicherheit ${Math.round(p.confidence * 100)} %">${dots(p.confidence)}</span></div>
-      <p class="why"><b>${esc(p.eventName)}</b> ${esc(why)}</p>
+      <div class="sub">${catTag(p)}<span class="price">${price}</span>${deadline ? `<span>${deadline}</span>` : ""}<span class="dots" title="Sicherheit ${Math.round(p.confidence * 100)} %">${dots(p.confidence)}</span>${usesHint(p) ? `<span class="use">${esc(usesHint(p)!)}</span>` : ""}</div>
+      <p class="why"><b>${esc(p.eventName)}</b> ${esc(why)}${p.uses?.length ? `<br><span class="needs">Verlangt von: ${esc(p.uses.join(", "))}</span>` : ""}</p>
     </li>`;
   });
   return `<section class="top ${action}"><h2>${title}<span>${hint}</span></h2>${
@@ -203,6 +222,14 @@ code { background: var(--panel); padding: 1px 6px; border-radius: 6px; }
 .moved .was { grid-column: 1 / 3; color: var(--muted); font-size: .82rem; padding-left: 36px; }
 .all-toggle { display: block; margin: 18px auto; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; }
 .all-toggle.on { border-color: var(--accent); }
+.cats { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; }
+.catbtn { background: var(--panel); border: 1px solid var(--line); color: var(--muted); font: inherit; font-weight: 600; padding: 7px 12px; border-radius: 999px; cursor: pointer; }
+.catbtn .n { margin-left: 6px; font-weight: 500; opacity: .8; }
+.catbtn[aria-pressed="true"] { background: var(--card); color: var(--fg); border-color: var(--accent); }
+.cat { cursor: default; }
+.use { color: var(--accent); font-size: .82rem; font-weight: 600; }
+.card .use { margin-top: 4px; }
+.needs { color: var(--muted); font-size: .82rem; }
 `;
 
 const SCRIPT = `
@@ -221,12 +248,26 @@ document.querySelectorAll('.all-toggle').forEach(b => b.addEventListener('click'
   b.classList.toggle('on', !all.hidden);
   if (!all.hidden) all.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }));
+// Kategorie und Suche wirken zusammen auf die Liste aller Signale
+let cats = (document.querySelector('.catbtn[aria-pressed="true"]')?.dataset.cats || '').split(' ').filter(Boolean);
 const q = document.querySelector('.search');
-if (q) q.addEventListener('input', () => {
-  const v = q.value.trim().toLowerCase();
-  document.querySelectorAll('.grid').forEach(g => { g.classList.toggle('showall', !!v); g.parentElement.classList.toggle('searching', !!v); });
-  document.querySelectorAll('.card').forEach(c => c.classList.toggle('hide', !!v && !c.dataset.name.includes(v)));
-});
+function filter() {
+  const v = q ? q.value.trim().toLowerCase() : '';
+  const narrowed = !!v || cats.length > 0;
+  document.querySelectorAll('.grid').forEach(g => { g.classList.toggle('showall', narrowed); g.parentElement.classList.toggle('searching', narrowed); });
+  document.querySelectorAll('.card').forEach(c => {
+    const ok = (!v || c.dataset.name.includes(v)) && (cats.length === 0 || cats.includes(c.dataset.cat));
+    c.classList.toggle('hide', !ok);
+  });
+}
+if (q) q.addEventListener('input', filter);
+document.querySelectorAll('.catbtn').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.catbtn').forEach(o => o.setAttribute('aria-pressed', o === b));
+  document.querySelectorAll('.catview').forEach(v => { v.hidden = v.dataset.view !== b.dataset.view; });
+  cats = b.dataset.view === 'all' ? [] : b.dataset.cats.split(' ');
+  filter();
+}));
+filter();
 `;
 
 /**
@@ -267,15 +308,37 @@ export function homePage(ctx: AppContext, req: Request, allowed: boolean): Respo
       // Fehlende Icons im Hintergrund holen, beim nächsten Laden sind sie da
       const missing = ids.filter((id) => !meta.get(id)?.icon);
       if (missing.length > 0) void resolveIcons(ctx.repo, missing, { max: 120, fetchImpl: ctx.iconFetch }).catch(() => {});
-      const top = weeklyTop(predictions);
-      const moved = movers(ctx.repo.marketItems(main.realm, (ctx.now ?? Date.now)()));
-      // Namen wie bei den Prognosen: Scan, sonst Wissensbasis
+      // Echte Bewegung aus den Scans, mit Kategorie (BoE-Ausrüstung raus) und Namen wie bei den Prognosen
+      const market = ctx.repo.marketItems(main.realm, (ctx.now ?? Date.now)());
+      const facts = ctx.repo.itemFacts(market.map((i) => i.itemId));
+      const needs = ctx.repo.factionNeeds();
       const known = new Map<number, string>([
         ...ctx.knowledge.items.map((i) => [i.id, i.name] as [number, string]),
         ...predictions.map((p) => [p.itemId, p.itemName] as [number, string]),
       ]);
-      for (const m of [...moved.up, ...moved.down]) if (m.name === `Item ${m.itemId}`) m.name = known.get(m.itemId) ?? m.name;
-      const movedMeta = ctx.repo.itemMeta([...moved.up, ...moved.down].map((m) => m.itemId));
+      for (const i of market) {
+        const f = facts.get(i.itemId);
+        i.kind = categorize({ name: i.name, classId: f?.classId ?? null, whKind: f?.whKind ?? null }, needs.has(i.itemId));
+        if (!i.name) i.name = known.get(i.itemId) ?? null;
+      }
+      const relevant = market.filter((i) => i.kind !== "gear");
+      const allMoved = movers(relevant, 50);
+      const movedAll = [...allMoved.up, ...allMoved.down];
+      const movedMeta = ctx.repo.itemMeta(movedAll.map((m) => m.itemId));
+      const kindOf = new Map(relevant.map((i) => [i.itemId, i.kind ?? "unknown"]));
+      const count = (cats: CategoryKey[]) => predictions.filter((p) => cats.includes(p.category ?? "unknown") && (p.action === "buy" || p.action === "sell")).length;
+      const views = VIEWS.map((v, i) => {
+        const inView = (p: Prediction) => v.cats.includes(p.category ?? "unknown");
+        const top = weeklyTop(predictions.filter(inView));
+        const moved = movers(relevant.filter((m) => v.cats.includes(kindOf.get(m.itemId) ?? "unknown")));
+        return `<div class="catview" data-view="${v.key}"${i === 0 ? "" : " hidden"}>
+          <div class="duo">
+            ${topList("📈 Gewinner der Woche", "jetzt kaufen", "buy", top.winners, meta)}
+            ${topList("📉 Verlierer der Woche", "jetzt verkaufen", "sell", top.losers, meta)}
+          </div>
+          ${moverLists(moved, movedMeta)}
+        </div>`;
+      });
       body = `
         <div class="chips">
           <span class="chip">🌍 <b>${esc(main.realm)}</b></span>
@@ -283,11 +346,10 @@ export function homePage(ctx: AppContext, req: Request, allowed: boolean): Respo
           <span class="chip">🤖 <b>${main.assessed}</b> bewertet</span>
           ${brief ? `<span class="chip">📰 <a href="${link("/brief")}">Lagebericht ${when(brief.createdAt)}</a> · ${brief.sources.length} Quellen</span>` : ""}
         </div>
-        <div class="duo">
-          ${topList("📈 Gewinner der Woche", "jetzt kaufen", "buy", top.winners, meta)}
-          ${topList("📉 Verlierer der Woche", "jetzt verkaufen", "sell", top.losers, meta)}
-        </div>
-        ${moverLists(moved, movedMeta)}
+        <nav class="cats" aria-label="Kategorien">${VIEWS.map(
+          (v, i) => `<button class="catbtn" type="button" data-view="${v.key}" data-cats="${v.cats.join(" ")}" aria-pressed="${i === 0}">${v.label}<span class="n">${count(v.cats)}</span></button>`,
+        ).join("")}</nav>
+        ${views.join("")}
         <button class="all-toggle" type="button">🔎 Alle ${sells.length + buys.length} Signale durchsuchen</button>
         <div class="all" hidden>
           <div class="bar">

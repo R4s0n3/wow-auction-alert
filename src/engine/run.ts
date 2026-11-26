@@ -1,3 +1,4 @@
+import { categorize, FOCUS } from "../categories.ts";
 import type { Config } from "../config.ts";
 import type { Alert, Repo } from "../db/repo.ts";
 import type { Knowledge } from "../knowledge/types.ts";
@@ -14,6 +15,36 @@ export interface EngineDeps {
   config: Config;
 }
 
+/**
+ * Setzt Kategorie und Verwendung bei der Handwerks-Fraktion und wirft BoE-Ausrüstung
+ * raus, die keine Verfügung verlangt (ein ganz anderer Markt, dafür taugt das hier nicht).
+ */
+export function categorized(repo: Repo, list: Prediction[]): Prediction[] {
+  const facts = repo.itemFacts(list.map((p) => p.itemId));
+  const needs = repo.factionNeeds();
+  const out: Prediction[] = [];
+  for (const p of list) {
+    const f = facts.get(p.itemId);
+    const uses = needs.get(p.itemId);
+    const category = categorize({ name: f?.name ?? p.itemName, classId: f?.classId ?? null, whKind: f?.whKind ?? null }, uses !== undefined);
+    if (category === "gear") continue;
+    out.push({ ...p, category, ...(uses ? { uses } : {}) });
+  }
+  return out;
+}
+
+/**
+ * Alerts für Discord: Kategorie neu bestimmen (gerade frisch von Wowhead geholt) und nur
+ * den Fokus behalten, also Handwerkswaren und Handwerks-Fraktion.
+ */
+export function focusAlerts(repo: Repo, alerts: Alert[]): Alert[] {
+  const fresh = new Map(categorized(repo, alerts.map((a) => a.prediction)).map((p) => [`${p.itemId}:${p.eventId}`, p]));
+  return alerts.flatMap((a) => {
+    const p = fresh.get(`${a.itemId}:${a.eventId}`);
+    return p && FOCUS.includes(p.category ?? "unknown") ? [{ ...a, prediction: p }] : [];
+  });
+}
+
 export function predictionsFor(deps: EngineDeps, realm: string, now: number): Prediction[] {
   const opts = {
     realm,
@@ -26,11 +57,11 @@ export function predictionsFor(deps: EngineDeps, realm: string, now: number): Pr
   const rules = predict(deps.knowledge, prices, opts);
 
   const assessments = deps.repo.assessments(realm, now - deps.config.aiMaxAgeDays * DAY_MS);
-  if (assessments.length === 0) return rules;
+  if (assessments.length === 0) return categorized(deps.repo, rules);
   const names = deps.repo.itemNames(assessments.map((a) => a.itemId));
   for (const item of deps.knowledge.items) if (!names.has(item.id)) names.set(item.id, item.name);
   const ai = aiPredictions(assessments, prices, names, opts);
-  return mergePredictions(rules, ai, new Set(assessments.map((a) => a.itemId))).sort(byActionThenUpside);
+  return categorized(deps.repo, mergePredictions(rules, ai, new Set(assessments.map((a) => a.itemId))).sort(byActionThenUpside));
 }
 
 /**

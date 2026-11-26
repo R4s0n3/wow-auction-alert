@@ -15,6 +15,36 @@ function ns.print(msg)
   DEFAULT_CHAT_FRAME:AddMessage("|cff9333eaAH-Prognose|r: " .. msg)
 end
 
+-- Neuere Clients (auch Forever) haben manche Funktionen nur noch in C_Item & Co.
+-- Erst beim Aufruf nachschlagen, dann klappt beides.
+function ns.getItemInfo(itemId)
+  local fn = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+  if fn then return fn(itemId) end
+end
+
+function ns.coinString(copper)
+  if GetCoinTextureString then return GetCoinTextureString(copper) end
+  if C_CurrencyInfo and C_CurrencyInfo.GetCoinTextureString then return C_CurrencyInfo.GetCoinTextureString(copper) end
+  local c = math.floor(copper or 0)
+  return ("%dg %ds %dc"):format(math.floor(c / 10000), math.floor(c % 10000 / 100), c % 100)
+end
+
+-- Kategorien wie auf dem Server (Feld cat in Data.lua). Fokus = Handwerkswaren + Fraktion.
+ns.CATEGORY_FILTERS = {
+  { key = "focus", label = "Fokus", cats = { trade = true, faction = true } },
+  { key = "trade", label = "Waren", cats = { trade = true } },
+  { key = "faction", label = "Fraktion", cats = { faction = true } },
+  { key = "consumable", label = "Verbrauch", cats = { consumable = true } },
+  { key = "recipe", label = "Rezepte", cats = { recipe = true } },
+  { key = "all", label = "Alle" },
+}
+
+function ns.categoryFilter(key)
+  for _, c in ipairs(ns.CATEGORY_FILTERS) do
+    if c.key == key then return c.cats end
+  end
+end
+
 -- "2026-12-05" -> "05.12."
 function ns.shortDate(iso)
   local _, m, d = string.match(iso or "", "^(%d+)-(%d+)-(%d+)$")
@@ -59,15 +89,17 @@ end
 local BAG_ORDER = { sell = 1, hold = 2, avoid = 3, buy = 4, watch = 5 }
 
 -- Listen fürs Fenster und /wahp list. tab: "sell", "buy" oder "bags" (was du besitzt),
--- query: Teil des Namens. Ergebnis: { itemId, p, count }, Wertvollstes zuerst.
-function ns.collect(tab, query)
+-- query: Teil des Namens, cats: erlaubte Kategorien (nil = alle).
+-- Ergebnis: { itemId, p, count }, Wertvollstes zuerst.
+function ns.collect(tab, query, cats)
   local data = WAHP_DATA
   local out = {}
   if not data or not data.items then return out end
   query = query and query ~= "" and string.lower(query) or nil
   for itemId, preds in pairs(data.items) do
     local p = preds[1]
-    if p and (not query or string.find(string.lower(p.name or ""), query, 1, true)) then
+    local catOk = not cats or cats[p and p.cat or "unknown"]
+    if p and catOk and (not query or string.find(string.lower(p.name or ""), query, 1, true)) then
       if tab == "bags" then
         local count = ns.itemCount(itemId)
         if count > 0 then out[#out + 1] = { itemId = itemId, p = p, count = count } end
@@ -106,7 +138,7 @@ function ns.printList()
   ns.print(("%d Signale für %s:"):format(#rows, data.realm or "?"))
   for i = 1, math.min(10, #rows) do
     local r = rows[i]
-    local link = GetItemInfo and select(2, GetItemInfo(r.itemId))
+    local link = select(2, ns.getItemInfo(r.itemId))
     local name = link or r.p.name or ("Item " .. r.itemId)
     local deadline = r.p.action == "buy" and r.p.buyUntil or r.p.sellTo
     local falling = (r.p.impact or 0) < 0

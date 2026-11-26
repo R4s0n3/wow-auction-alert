@@ -3,7 +3,8 @@ import { startServer, type AppContext } from "../src/api/server.ts";
 import { loadConfig } from "../src/config.ts";
 import { openDatabase } from "../src/db/database.ts";
 import { Repo } from "../src/db/repo.ts";
-import { runEngine } from "../src/engine/run.ts";
+import { predictionsFor, runEngine } from "../src/engine/run.ts";
+import { toAddonLua } from "../src/export/lua.ts";
 import { discordMessages, dots, itemLines, sendDiscord, shortGold, weeklyMessages } from "../src/live/discord.ts";
 import { digestDue, sendWeeklyDigest } from "../src/digest.ts";
 import type { Alert } from "../src/db/repo.ts";
@@ -158,16 +159,41 @@ describe("Gewinner und Verlierer der Woche", () => {
   test("Startseite: zwei Top-10-Listen oben, alle Signale hinter einem Knopf, ohne Vorwoche keine echte Bewegung", async () => {
     ctx = makeContext();
     await postScan(scan(3000));
+    ctx.repo.setItemMeta(4, { icon: null, quality: null, name: null, kind: "trade" }, NOW); // Pestblüte: Handwerkswaren
     const html = await (await fetch(url("/"))).text();
-    const winners = html.split("📈 Gewinner der Woche")[1]!.split("</section>")[0]!;
+    const focus = html.split('data-view="focus"')[2]!.split('<div class="catview"')[0]!; // [1] ist der Knopf
+    const winners = focus.split("📈 Gewinner der Woche")[1]!.split("</section>")[0]!;
     expect(winners).toContain("jetzt kaufen");
     expect(winners).toContain('<span class="pos">1</span>');
     expect(winners).toContain('<span class="name">Pestblüte</span>');
-    expect(winners.match(/<li class="rank">/g)!.length).toBeLessThanOrEqual(10);
-    expect(html.split("📉 Verlierer der Woche")[1]!.split("</section>")[0]).toContain("Gerade nichts.");
+    expect(winners.match(/<li class="rank">/g)!.length).toBe(1); // im Fokus nur Pestblüte, der Rest hat noch keine Kategorie
+    expect(winners).toContain('<span class="cat" title="Handwerkswaren">🧱</span>');
+    expect(focus.split("📉 Verlierer der Woche")[1]!.split("</section>")[0]).toContain("Gerade nichts.");
+    const all = html.split('<div class="catview" data-view="all" hidden>')[1]!.split('<div class="catview"')[0]!;
+    expect(all.split("</section>")[0]!.match(/<li class="rank">/g)!.length).toBeGreaterThan(1); // "Alle" zeigt auch die ohne Kategorie
+    expect(html).toContain('<button class="catbtn" type="button" data-view="focus" data-cats="trade faction" aria-pressed="true">🎯 Fokus<span class="n">1</span></button>');
     expect(html).toContain('<div class="all" hidden>');
     expect(html.indexOf("Gewinner der Woche")).toBeLessThan(html.indexOf('<div class="all" hidden>'));
     expect(html).not.toContain("Echte Bewegung");
+  });
+
+  test("BoE-Ausrüstung fliegt raus, außer eine Handwerksverfügung verlangt sie", async () => {
+    ctx = makeContext();
+    // Rüstung ohne und mit Verfügung, dazu die Verfügung selbst
+    ctx.repo.insertScan("eu", "t", NOW - 3_600_000, [
+      { itemId: 4, minBuyout: 3000, quantity: 20, classId: 7 },
+      { itemId: 20, minBuyout: 50000, quantity: 3, name: "Feuerschutz", classId: 4 },
+      { itemId: 10, minBuyout: 40000, quantity: 3, name: "Flask A", classId: 2 },
+      { itemId: 999, minBuyout: 900, quantity: 5, name: "Handwerksverfügung: Flask A" },
+    ]);
+    const preds = predictionsFor(ctx, "eu", NOW);
+    const by = new Map(preds.map((p) => [p.itemId, p]));
+    expect(by.get(4)?.category).toBe("trade");
+    expect(by.has(20)).toBe(false); // Rüstung ohne Verwendung: raus
+    expect(by.get(10)).toMatchObject({ category: "faction", uses: ["Handwerksverfügung: Flask A"] });
+    const lua = toAddonLua(preds, { realm: "eu", generatedAt: NOW });
+    expect(lua).toContain('cat = "faction", uses = "Handwerksverfügung: Flask A"');
+    expect(lua).not.toContain("[20] =");
   });
 
   test("Startseite: mit Scans aus der Vorwoche erscheint, was wirklich gestiegen ist", async () => {
@@ -208,6 +234,7 @@ describe("Gewinner und Verlierer der Woche", () => {
 
     ctx = makeContext();
     await postScan(scan(3000));
+    ctx.repo.setItemMeta(4, { icon: null, quality: null, name: null, kind: "trade" }, NOW); // Pestblüte: Handwerkswaren
     const posted: any[] = [];
     const fakeFetch = (async (target: string, init?: RequestInit) => {
       if (String(target).includes("wowhead")) return new Response(null, { status: 404 });
@@ -238,7 +265,7 @@ describe("Startseite", () => {
     const sell = html.split('id="sell"')[1]!.split('id="buy"')[0]!;
     expect(sell).toContain("Gerade nichts."); // vor dem Raid nur Kaufen
     const buy = html.split('id="buy"')[1]!;
-    expect(buy).toContain('<article class="card buy" data-name="pestblüte">');
+    expect(buy).toContain('<article class="card buy" data-name="pestblüte" data-cat="unknown">');
     expect(buy).toContain('href="https://www.wowhead.com/forever/de/item=4"');
     expect(buy).toContain('<span class="icon none">P</span>'); // noch kein Icon
     expect(buy).toMatch(/<span class="badge">\+\d+ %<\/span>/);

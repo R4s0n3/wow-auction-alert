@@ -1,6 +1,7 @@
 import type { Alert } from "../db/repo.ts";
 import type { Prediction } from "../engine/predict.ts";
 import { byWorth } from "../engine/rank.ts";
+import { CATEGORIES, CRATE_PREFIX, WRIT_PREFIX } from "../categories.ts";
 import { iconUrl, wowheadUrl } from "../icons.ts";
 
 // Eine Nachricht pro Realm und Durchlauf. Darin eine Karte pro Item, mit Icon als
@@ -76,15 +77,27 @@ export function itemLines(p: Prediction): [string, string] {
     first = `💰 **Peak**${p.currentPrice !== null ? ` · ${shortGold(p.currentPrice)}` : ""}`;
     deadline = p.sellTo ? shortDate(p.sellTo) : null;
   }
-  const second = [deadline ? `⏳ ${deadline}` : null, dots(p.confidence) + (p.source === "ai" ? " 🤖" : "")].filter(Boolean).join(" · ");
+  const second = [deadline ? `⏳ ${deadline}` : null, dots(p.confidence) + (p.source === "ai" ? " 🤖" : ""), usesHint(p)].filter(Boolean).join(" · ");
   return [first, second];
+}
+
+/** "📜 für Verfügung" / "📦 für Kisten": wenn die Handwerks-Fraktion das Item verlangt */
+export function usesHint(p: Prediction): string | null {
+  const uses = p.uses ?? [];
+  const writ = uses.some((u) => u.startsWith(WRIT_PREFIX));
+  const crate = uses.some((u) => u.startsWith(CRATE_PREFIX));
+  if (writ && crate) return "📜📦 für Verfügung & Kisten";
+  if (writ) return "📜 für Verfügung";
+  if (crate) return "📦 für Kisten";
+  return null;
 }
 
 function card(p: Prediction, extras: DiscordExtras, header?: string): Embed {
   const icon = extras.icons?.get(p.itemId);
+  const emoji = p.category && p.category !== "unknown" ? `${CATEGORIES[p.category].emoji} ` : "";
   return {
     ...(header ? { author: { name: header } } : {}),
-    title: p.itemName.slice(0, 256),
+    title: `${emoji}${p.itemName}`.slice(0, 256),
     url: wowheadUrl(p.itemId),
     description: itemLines(p).join("\n"),
     color: p.action === "buy" ? GREEN : RED,

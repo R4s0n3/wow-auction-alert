@@ -6,6 +6,7 @@ import type { Knowledge } from "../knowledge/types.ts";
 import { AiError, assessChunk, compileBrief, MAX_SEARCHES, priceFor, research, UsageTally } from "./claude.ts";
 import { assessSystem, itemsPrompt, RESEARCH_SYSTEM, researchPrompt, SOURCES_SYSTEM, sourcesPrompt } from "./prompts.ts";
 import { apiModel } from "./provider.ts";
+import { categorize } from "../categories.ts";
 import { movers, type Mover } from "../engine/weekly.ts";
 import { fetchSources, type SourceDoc } from "./sources.ts";
 import type { Brief, MarketItem, Source, StoredAssessment } from "./types.ts";
@@ -70,6 +71,8 @@ export function selectItems(
 ): MarketItem[] {
   const due = items.filter((i) => {
     if (i.quality !== null && i.quality < 1) return false;
+    // BoE-Ausrüstung ohne Verwendung bei der Fraktion: anderer Markt, kostet nur Tokens
+    if (i.kind === "gear") return false;
     if (opts.all) return true;
     const prev = existing.get(i.itemId);
     if (!prev) return true;
@@ -135,6 +138,14 @@ export async function runAnalysis(deps: AnalyzeDeps, opts: AnalyzeOptions): Prom
 
   const market = repo.marketItems(opts.realm, now);
   if (market.length === 0) throw new AiError(`Keine Scan-Daten für ${opts.realm}. Erst im Spiel /wahp scan, dann den Companion laufen lassen.`);
+  // Kategorie und Verwendung bei der Handwerks-Fraktion, für Auswahl und Prompt
+  const facts = repo.itemFacts(market.map((i) => i.itemId));
+  const needs = repo.factionNeeds();
+  for (const i of market) {
+    const f = facts.get(i.itemId);
+    i.uses = needs.get(i.itemId);
+    i.kind = categorize({ name: i.name, classId: f?.classId ?? null, whKind: f?.whKind ?? null }, i.uses !== undefined);
+  }
   const existing = new Map(repo.assessments(opts.realm).map((a) => [a.itemId, a]));
   // --redo up,down: nur Items neu bewerten, deren letzte Bewertung so lautet
   const redo = opts.redo?.length ? new Set(opts.redo) : null;

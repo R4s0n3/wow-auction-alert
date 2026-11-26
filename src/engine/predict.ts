@@ -1,3 +1,4 @@
+import type { CategoryKey } from "../categories.ts";
 import type { Knowledge } from "../knowledge/types.ts";
 import { curveAt, curveFor, DAY_MS, eventStartMs, windowsFor } from "./curve.ts";
 import { computeDemand } from "./demand.ts";
@@ -50,6 +51,10 @@ export interface Prediction {
   sellFrom: string | null;
   sellTo: string | null;
   drivers: Array<{ chain: string; reason: string; impact: number; confidence: number }>;
+  /** Kategorie (siehe categories.ts), gesetzt von predictionsFor */
+  category?: CategoryKey;
+  /** Welche Verfügungen und Kisten der Handwerks-Fraktion das Item verlangen */
+  uses?: string[];
 }
 
 const CURRENT_WINDOW_MS = 2 * DAY_MS;

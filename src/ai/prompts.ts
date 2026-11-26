@@ -1,3 +1,4 @@
+import { CATEGORIES, CRATE_PREFIX, WRIT_PREFIX } from "../categories.ts";
 import type { Knowledge } from "../knowledge/types.ts";
 import { formatGold } from "../format.ts";
 import type { MarketItem } from "./types.ts";
@@ -121,6 +122,7 @@ Worauf es ankommt:
 - Verkaufen ist genauso wichtig wie Kaufen. Liegt ein Preis jetzt klar über dem Niveau, das du nach der Launch-Phase erwartest (Knappheit, Hype, wenige Anbieter), und wird er absehbar fallen, dann down mit sellBy in den nächsten Tagen. Ein hoher Preis allein reicht nicht, es braucht einen Grund, warum er fällt.
 - Nachfrage wandert über Rezepte: Wenn ein Raid Feuerschutztränke braucht, steigen auch die Materialien dafür.
 - Was schon eingepreist ist, steigt nicht nochmal. Die Spalte Trend zeigt die Veränderung zur Vorwoche.
+- Handwerks-Fraktion: Abgefangene Kisten werden mit Paketen aus Handwerkswaren gefüllt (z. B. 20 Mithrilbarren), eine Handwerksverfügung verlangt genau das Item aus ihrem Namen. Steht in der Kategorie "für Abgefangene Kisten" oder "für Handwerksverfügung", kommt von dort zusätzliche Nachfrage, die mit dem Wert der Belohnungen steigt und fällt. Hergestellte Ausrüstung ist nur deshalb in der Liste: Ist sie gerade billig, lohnt der Kauf für die Verfügung.
 - Nach einem Launch fallen viele Rohstoffpreise, weil immer mehr Spieler Stufe 60 erreichen und farmen. Das gilt besonders für Materialien ohne Endgame-Nachfrage.
 - Händlerwaren und Items mit sehr wenig Menge im AH sind schwer einzuschätzen. Dort lieber flat mit niedriger Sicherheit.
 - Stütze dich auf den Lagebericht. Was dort nicht steht, darfst du aus Classic-Wissen ableiten, aber dann mit niedrigerer Sicherheit.
@@ -140,13 +142,24 @@ function trend(i: MarketItem): string {
 
 const clean = (s: string) => s.replace(/[|\n\r]/g, " ").trim();
 
+/** "Handwerkswaren, für Abgefangene Kisten": Kategorie plus Nachfrage durch die Handwerks-Fraktion */
+function kindLabel(i: MarketItem): string {
+  const base = i.kind && i.kind !== "unknown" ? CATEGORIES[i.kind].label : clean(i.category ?? "?");
+  const uses = i.uses ?? [];
+  const extra = [
+    uses.some((u) => u.startsWith(WRIT_PREFIX)) ? "für Handwerksverfügung" : null,
+    uses.some((u) => u.startsWith(CRATE_PREFIX)) ? "für Abgefangene Kisten" : null,
+  ].filter(Boolean);
+  return extra.length ? `${base}, ${extra.join(", ")}` : base;
+}
+
 export function itemsPrompt(items: MarketItem[]): string {
   const rows = items.map((i) =>
     [
       i.itemId,
       clean(i.name ?? "unbekannt"),
       i.quality === null ? "?" : (QUALITY[i.quality] ?? i.quality),
-      clean(i.category ?? "?"),
+      kindLabel(i),
       formatGold(i.price),
       i.priceWeekBefore === null ? "?" : formatGold(i.priceWeekBefore),
       trend(i),

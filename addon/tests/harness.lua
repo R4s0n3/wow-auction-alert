@@ -110,9 +110,10 @@ local function row(a)
   return a[4] or "Name", nil, a[2], a[5] or 1, true, 60, "", 0, 0, a[3], 0, false, nil, "x", "x", 0, a[1], true
 end
 
+-- Wie im Client: itemID, Typ, Untertyp, Slot, Icon, classID, subclassID
 GetItemInfoInstant = function(itemId)
-  if itemId == 13466 or itemId == 13468 then return itemId, "Handwerkswaren", "Kräuter" end
-  return itemId, "Verschiedenes", "Verschiedenes"
+  if itemId == 13466 or itemId == 13468 then return itemId, "Handwerkswaren", "Kräuter", "", 0, 7, 9 end
+  return itemId, "Verschiedenes", "Verschiedenes", "", 0, 15, 0
 end
 
 function H.useApi(kind)

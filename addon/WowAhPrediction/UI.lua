@@ -8,7 +8,8 @@ local _, ns = ...
 -- Bilder statt Text: Item-Icons und Münzen kommen aus dem Client, die Sicherheit
 -- ist ein Balken. Die WoW-Schrift kann keine Emojis, deshalb keine im Fenster.
 
-local W, H = 480, 610
+local W, H = 480, 636
+local LIST_TOP = -96 -- unter Tabs und Kategorie-Leiste
 local ROWS, ROW_H = 8, 46
 local RELOAD_DELAY = 3
 local QUESTION_MARK = 134400 -- INV_Misc_QuestionMark
@@ -18,7 +19,7 @@ local TABS = {
   { key = "bags", label = "Taschen", color = "ffffd100" },
 }
 
-local state = { tab = "sell", query = "", selected = nil, list = {}, countdown = nil, reloadPending = false, progress = nil }
+local state = { tab = "sell", cat = "focus", query = "", selected = nil, list = {}, countdown = nil, reloadPending = false, progress = nil }
 local f -- Hauptfenster, wird beim ersten Öffnen gebaut
 local ui = { rows = {}, tabs = TABS }
 ns.ui = ui
@@ -48,8 +49,9 @@ end
 local function qualityHex(q)
   local c = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q]
   if c and c.hex then return c.hex end
-  if GetItemQualityColor then
-    local _, _, _, hex = GetItemQualityColor(q)
+  local qualityColor = (C_Item and C_Item.GetItemQualityColor) or GetItemQualityColor
+  if qualityColor then
+    local _, _, _, hex = qualityColor(q)
     if hex then return "|c" .. hex end
   end
   return "|cffffffff"
@@ -63,7 +65,7 @@ function ns.coins(copper)
   elseif copper >= 10000 then
     copper = math.floor(copper / 100) * 100
   end
-  return GetCoinTextureString and GetCoinTextureString(copper) or tostring(copper)
+  return ns.coinString(copper)
 end
 
 -- Großes Badge rechts: +42 % grün, -30 % rot, Peak gelb, sonst die Aktion
@@ -94,6 +96,17 @@ function ns.rowDetail(p, count)
   end
   if count then parts[#parts + 1] = ("|cffffd100%dx|r"):format(count) end
   return table.concat(parts, "    ")
+end
+
+-- "[Verfügung]" / "[Kisten]": die Handwerks-Fraktion verlangt das Item (Feld uses in Data.lua)
+function ns.usesTag(p)
+  local uses = p.uses or ""
+  local writ = string.find(uses, "Handwerksverfügung", 1, true) ~= nil
+  local crate = string.find(uses, "Abgefangene Kiste", 1, true) ~= nil
+  if writ and crate then return "  |cffe0a25a[Verfügung, Kisten]|r" end
+  if writ then return "  |cffe0a25a[Verfügung]|r" end
+  if crate then return "  |cffe0a25a[Kisten]|r" end
+  return ""
 end
 
 function ns.reload()
@@ -133,7 +146,7 @@ local function fillRow(row, r)
   local p = r.p
   row.itemId = r.itemId
   row.icon:SetTexture(itemIcon(r.itemId))
-  row.name:SetText(qualityHex(qualityOf(r.itemId)) .. (p.name or ("Item " .. r.itemId)) .. "|r" .. (p.src == "ai" and "  |cff777777KI|r" or ""))
+  row.name:SetText(qualityHex(qualityOf(r.itemId)) .. (p.name or ("Item " .. r.itemId)) .. "|r" .. ns.usesTag(p) .. (p.src == "ai" and "  |cff777777KI|r" or ""))
   row.badge:SetText(ns.changeText(p))
   row.sub:SetText(ns.rowDetail(p, r.count))
   row.conf:SetValue(p.confidence)
@@ -146,6 +159,7 @@ local function emptyText()
   if not WAHP_DATA or not WAHP_DATA.items then return "Noch keine Prognosen geladen. Läuft der Companion?" end
   if state.query ~= "" then return "Nichts gefunden für \"" .. state.query .. "\"." end
   if state.tab == "bags" then return "Nichts mit Prognose in deinen Taschen oder auf der Bank." end
+  if state.cat ~= "all" then return "Nichts in dieser Kategorie. Probier \"Alle\"." end
   return "Gerade keine Signale."
 end
 
@@ -212,7 +226,7 @@ function ui.updateDetails()
   d.change:SetText(ns.colored(p.action) .. "   " .. ns.changeText(p) .. ("   |cffaaaaaa%d %% sicher|r"):format(math.floor((p.confidence or 0) * 100 + 0.5)))
   d.prices:SetText(ns.rowDetail(p, r.count or (ns.itemCount(r.itemId) > 0 and ns.itemCount(r.itemId) or nil)))
   local event = (p.src == "ai" and "KI: " or "") .. (p.event or "")
-  d.why:SetText("|cffffd100" .. event .. "|r" .. (p.why and ("\n" .. p.why) or ""))
+  d.why:SetText("|cffffd100" .. event .. "|r" .. (p.why and ("\n" .. p.why) or "") .. (p.uses and ("\n|cffe0a25aVerlangt von: " .. p.uses .. "|r") or ""))
   d.conf:SetValue(p.confidence)
   d.link:SetText(ns.wowheadUrl(r.itemId))
   d.link:SetCursorPosition(0)
@@ -220,10 +234,14 @@ end
 
 function ui.refresh()
   if not f or not f:IsShown() then return end
-  state.list = ns.collect(state.tab, state.query)
+  local cats = ns.categoryFilter(state.cat)
+  state.list = ns.collect(state.tab, state.query, cats)
   for _, t in ipairs(TABS) do
-    t.button:SetText(("|c%s%s|r  %d"):format(t.color, t.label, #ns.collect(t.key, state.query)))
+    t.button:SetText(("|c%s%s|r  %d"):format(t.color, t.label, #ns.collect(t.key, state.query, cats)))
     if t.key == state.tab then t.button:LockHighlight() else t.button:UnlockHighlight() end
+  end
+  for key, b in pairs(ui.catButtons) do
+    if key == state.cat then b:LockHighlight() else b:UnlockHighlight() end
   end
   FauxScrollFrame_Update(ui.scroll, #state.list, ROWS, ROW_H)
   local offset = FauxScrollFrame_GetOffset(ui.scroll)
@@ -246,6 +264,12 @@ function ui.setTab(key)
   state.tab = key
   if ui.scroll then FauxScrollFrame_OnVerticalScroll(ui.scroll, 0, ROW_H, ui.refresh) end
   ui.refresh()
+end
+
+function ui.setCategory(key)
+  state.cat = key
+  WAHP_DB.settings.category = key
+  ui.setTab(state.tab)
 end
 
 function ui.select(itemId)
@@ -319,9 +343,22 @@ local function build()
   search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
   ui.search = search
 
+  -- Kategorie-Leiste: Fokus (Waren + Fraktion), einzelne Kategorien, Alle
+  local prevCat
+  ui.catButtons = {}
+  for _, c in ipairs(ns.CATEGORY_FILTERS) do
+    local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    b:SetSize(72, 20)
+    if prevCat then b:SetPoint("LEFT", prevCat, "RIGHT", 3, 0) else b:SetPoint("TOPLEFT", 12, -66) end
+    b:SetText(c.label)
+    b:SetScript("OnClick", function() ui.setCategory(c.key) end)
+    ui.catButtons[c.key] = b
+    prevCat = b
+  end
+
   -- Liste
   local scroll = CreateFrame("ScrollFrame", "WAHPScroll", f, "FauxScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", 10, -70)
+  scroll:SetPoint("TOPLEFT", 10, LIST_TOP)
   scroll:SetSize(W - 40, ROWS * ROW_H)
   scroll:SetScript("OnVerticalScroll", function(self, offset)
     FauxScrollFrame_OnVerticalScroll(self, offset, ROW_H, ui.refresh)
@@ -365,8 +402,8 @@ local function build()
     row:SetScript("OnLeave", function() GameTooltip:Hide() end)
     row:SetScript("OnClick", function(self)
       if not self.itemId then return end
-      if IsShiftKeyDown() and ChatEdit_InsertLink and GetItemInfo then
-        local _, link = GetItemInfo(self.itemId)
+      if IsShiftKeyDown() and ChatEdit_InsertLink then
+        local _, link = ns.getItemInfo(self.itemId)
         if link then ChatEdit_InsertLink(link) return end
       end
       ui.select(self.itemId)
@@ -384,7 +421,7 @@ local function build()
   -- Details
   local d = {}
   ui.details = d
-  local top = -78 - ROWS * ROW_H
+  local top = LIST_TOP - 8 - ROWS * ROW_H
   local line = f:CreateTexture(nil, "ARTWORK")
   line:SetColorTexture(1, 1, 1, 0.08)
   line:SetPoint("TOPLEFT", 12, top)
@@ -478,6 +515,9 @@ end
 
 function ns.showWindow()
   if not f then build() end
+  for _, c in ipairs(ns.CATEGORY_FILTERS) do
+    if c.key == WAHP_DB.settings.category then state.cat = c.key end -- zuletzt gewählte Kategorie
+  end
   place()
   ui.realm:SetText(WAHP_DATA and WAHP_DATA.realm or "")
   f:Show()

@@ -76,12 +76,19 @@ end
 -- was hinter einer ID steckt. Liegt global in WAHP_DB.itemInfo, nicht pro Scan.
 function ns.rememberItemInfo(names)
   local store = WAHP_DB.itemInfo
+  -- Neuere Clients (auch Forever) haben die Funktion nur noch unter C_Item
+  local instant = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
   for itemId, info in pairs(names) do
     local entry = store[itemId] or {}
     entry.n = info.n
     entry.ql = info.ql
-    if not entry.c and GetItemInfoInstant then
-      local _, itemType, itemSubType = GetItemInfoInstant(itemId)
+    if entry.cls == nil and instant then
+      -- itemID, Typ, Untertyp, Slot, Icon, classID, subclassID
+      local _, itemType, itemSubType, _, _, classId, subclassId = instant(itemId)
+      if type(classId) == "number" then
+        entry.cls = classId
+        entry.sub = subclassId
+      end
       if itemType and itemType ~= "" then
         entry.c = (itemSubType and itemSubType ~= "" and itemSubType ~= itemType) and (itemType .. "/" .. itemSubType) or itemType
       end

@@ -61,7 +61,22 @@ CREATE TABLE IF NOT EXISTS items (
   updated_at INTEGER NOT NULL,
   -- Icon-Name von Wowhead (z. B. inv_misc_herb_plaguebloom), für Discord und Website
   icon            TEXT,
-  icon_checked_at INTEGER
+  icon_checked_at INTEGER,
+  -- Itemklasse aus dem Client (7 = Handwerkswaren, 2/4 = Waffe/Rüstung …), sprachunabhängig
+  class_id        INTEGER,
+  subclass_id     INTEGER,
+  -- Ersatz, solange die Klasse fehlt: Kategorie aus dem Wowhead-Tooltip
+  wh_kind         TEXT,
+  wh_checked_at   INTEGER
+);
+
+-- Was die Handwerks-Fraktion verlangt: Abgefangene Kisten werden mit Paketen aus
+-- Handwerkswaren gefüllt (aus dem Wowhead-Tooltip). Verfügungen stehen im Namen.
+CREATE TABLE IF NOT EXISTS faction_needs (
+  source_item_id INTEGER NOT NULL,
+  need_name      TEXT    NOT NULL,
+  count          INTEGER,
+  PRIMARY KEY (source_item_id, need_name)
 );
 
 -- Lagebericht der KI-Recherche (Websuche), Grundlage für alle Item-Bewertungen
@@ -109,5 +124,9 @@ export function openDatabase(path: string): Database {
   const itemColumns = new Set((db.query("PRAGMA table_info(items)").all() as Array<{ name: string }>).map((c) => c.name));
   if (!itemColumns.has("icon")) db.exec("ALTER TABLE items ADD COLUMN icon TEXT");
   if (!itemColumns.has("icon_checked_at")) db.exec("ALTER TABLE items ADD COLUMN icon_checked_at INTEGER");
+  const added: Array<[string, string]> = [["class_id", "INTEGER"], ["subclass_id", "INTEGER"], ["wh_kind", "TEXT"], ["wh_checked_at", "INTEGER"]];
+  for (const [col, type] of added) {
+    if (!itemColumns.has(col)) db.exec(`ALTER TABLE items ADD COLUMN ${col} ${type}`);
+  }
   return db;
 }

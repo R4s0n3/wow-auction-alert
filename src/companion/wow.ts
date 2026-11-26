@@ -67,13 +67,18 @@ const isObject = (v: LuaValue | undefined): v is { [key: string]: LuaValue } =>
 const positiveInt = (v: LuaValue | undefined): number | null =>
   typeof v === "number" && Number.isFinite(v) && v >= 1 ? Math.round(v) : null;
 
-/** Name, Qualität, Kategorie aus WAHP_DB.itemInfo, nur was plausibel ist */
-function itemInfo(v: LuaValue | undefined): Pick<ScanItem, "name" | "quality" | "category"> {
+type Info = Pick<ScanItem, "name" | "quality" | "category" | "classId" | "subclassId">;
+const intIn = (v: LuaValue | undefined, max: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= max;
+
+/** Name, Qualität, Kategorie, Itemklasse aus WAHP_DB.itemInfo, nur was plausibel ist */
+function itemInfo(v: LuaValue | undefined): Info {
   if (!isObject(v)) return {};
-  const out: Pick<ScanItem, "name" | "quality" | "category"> = {};
+  const out: Info = {};
   if (typeof v.n === "string" && v.n.length > 0 && v.n.length <= 120) out.name = v.n;
-  if (typeof v.ql === "number" && Number.isInteger(v.ql) && v.ql >= 0 && v.ql <= 8) out.quality = v.ql;
+  if (intIn(v.ql, 8)) out.quality = v.ql;
   if (typeof v.c === "string" && v.c.length > 0 && v.c.length <= 80) out.category = v.c;
+  if (intIn(v.cls, 30)) out.classId = v.cls;
+  if (intIn(v.sub, 60)) out.subclassId = v.sub;
   return out;
 }
 

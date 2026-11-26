@@ -79,7 +79,9 @@ function parseScan(body: unknown): ParsedScan | string {
       (it.quantity === undefined || (Number.isInteger(it.quantity) && (it.quantity as number) >= 0)) &&
       optionalText(it.name, 120) &&
       optionalText(it.category, 80) &&
-      (it.quality === undefined || (Number.isInteger(it.quality) && (it.quality as number) >= 0 && (it.quality as number) <= 8));
+      (it.quality === undefined || (Number.isInteger(it.quality) && (it.quality as number) >= 0 && (it.quality as number) <= 8)) &&
+      (it.classId === undefined || (Number.isInteger(it.classId) && (it.classId as number) >= 0 && (it.classId as number) <= 30)) &&
+      (it.subclassId === undefined || (Number.isInteger(it.subclassId) && (it.subclassId as number) >= 0 && (it.subclassId as number) <= 60));
     if (!ok) {
       return `items[${i}]: braucht itemId, minBuyout (Kupfer) und optional marketPrice/quantity als ganze Zahlen, name/category als kurzen Text, quality 0-8`;
     }
@@ -91,6 +93,8 @@ function parseScan(body: unknown): ParsedScan | string {
       name: it.name as string | undefined,
       quality: it.quality as number | undefined,
       category: it.category as string | undefined,
+      classId: it.classId as number | undefined,
+      subclassId: it.subclassId as number | undefined,
     });
   }
   return { realm: b.realm, source, scannedAt: b.scannedAt, items };

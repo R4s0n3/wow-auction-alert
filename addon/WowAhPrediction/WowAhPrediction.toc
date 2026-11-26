@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: AH-Prognose
 ## Notes: Was du jetzt verkaufen oder kaufen solltest: Fenster mit Icons, Tooltip-Prognosen und AH-Scan für den Companion. /wahp
-## Version: 0.2.0
+## Version: 0.3.0
 ## SavedVariables: WAHP_DB
 
 Data.lua

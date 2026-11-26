@@ -13,6 +13,9 @@ export interface ScanItem {
   name?: string;
   quality?: number;
   category?: string;
+  /** Itemklasse und Unterklasse aus dem Client (classID/subclassID) */
+  classId?: number;
+  subclassId?: number;
 }
 
 export interface Alert {
@@ -57,19 +60,29 @@ export class Repo {
        VALUES ($realm, $itemId, $ts, $minBuyout, $marketPrice, $quantity, $source)`,
     );
     const info = this.db.query(
-      `INSERT INTO items (item_id, name, quality, category, updated_at)
-       VALUES ($itemId, $name, $quality, $category, $ts)
+      `INSERT INTO items (item_id, name, quality, category, class_id, subclass_id, updated_at)
+       VALUES ($itemId, $name, $quality, $category, $classId, $subclassId, $ts)
        ON CONFLICT (item_id) DO UPDATE SET
          name = COALESCE(excluded.name, name),
          quality = COALESCE(excluded.quality, quality),
          category = COALESCE(excluded.category, category),
+         class_id = COALESCE(excluded.class_id, class_id),
+         subclass_id = COALESCE(excluded.subclass_id, subclass_id),
          updated_at = excluded.updated_at`,
     );
     this.db.transaction(() => {
-      for (const { name, quality, category, ...item } of items) {
+      for (const { name, quality, category, classId, subclassId, ...item } of items) {
         stmt.run({ realm, source, ts, ...item, marketPrice: item.marketPrice ?? null });
-        if (name !== undefined || quality !== undefined || category !== undefined) {
-          info.run({ itemId: item.itemId, name: name ?? null, quality: quality ?? null, category: category ?? null, ts });
+        if (name !== undefined || quality !== undefined || category !== undefined || classId !== undefined) {
+          info.run({
+            itemId: item.itemId,
+            name: name ?? null,
+            quality: quality ?? null,
+            category: category ?? null,
+            classId: classId ?? null,
+            subclassId: subclassId ?? null,
+            ts,
+          });
         }
       }
     })();
@@ -87,28 +100,104 @@ export class Repo {
     return out;
   }
 
-  /** Items ohne Icon, die noch nie oder vor `checkedBefore` nachgeschlagen wurden */
-  missingIcons(itemIds: number[], checkedBefore: number): number[] {
-    const stmt = this.db.query(`SELECT icon, icon_checked_at AS checked FROM items WHERE item_id = $itemId`);
+  /**
+   * Items, für die Wowhead gefragt werden sollte: kein Icon, oder weder Klasse noch
+   * Tooltip-Kategorie bekannt, und das jeweils nicht schon nach `checkedBefore` versucht.
+   */
+  missingMeta(itemIds: number[], checkedBefore: number): number[] {
+    const stmt = this.db.query(
+      `SELECT icon, icon_checked_at AS iconChecked, class_id AS classId, wh_kind AS kind, wh_checked_at AS kindChecked
+       FROM items WHERE item_id = $itemId`,
+    );
     return itemIds.filter((itemId) => {
-      const row = stmt.get({ itemId }) as { icon: string | null; checked: number | null } | null;
-      return !row || (!row.icon && (row.checked === null || row.checked < checkedBefore));
+      const r = stmt.get({ itemId }) as { icon: string | null; iconChecked: number | null; classId: number | null; kind: string | null; kindChecked: number | null } | null;
+      if (!r) return true;
+      const iconMissing = !r.icon && (r.iconChecked === null || r.iconChecked < checkedBefore);
+      const kindMissing = r.classId === null && !r.kind && (r.kindChecked === null || r.kindChecked < checkedBefore);
+      return iconMissing || kindMissing;
     });
   }
 
+  /** Alter Name, bleibt für die Icon-Tests */
+  missingIcons(itemIds: number[], checkedBefore: number): number[] {
+    return this.missingMeta(itemIds, checkedBefore);
+  }
+
   /** Ergebnis der Wowhead-Abfrage. Name und Qualität aus dem Spiel haben Vorrang. */
-  setIcon(itemId: number, icon: string | null, quality: number | null, name: string | null, ts: number): void {
+  setItemMeta(itemId: number, meta: { icon: string | null; quality: number | null; name: string | null; kind: string | null }, ts: number): void {
     this.db
       .query(
-        `INSERT INTO items (item_id, name, quality, icon, icon_checked_at, updated_at)
-         VALUES ($itemId, $name, $quality, $icon, $ts, $ts)
+        `INSERT INTO items (item_id, name, quality, icon, icon_checked_at, wh_kind, wh_checked_at, updated_at)
+         VALUES ($itemId, $name, $quality, $icon, $ts, $kind, $ts, $ts)
          ON CONFLICT (item_id) DO UPDATE SET
            icon = COALESCE(excluded.icon, icon),
            icon_checked_at = excluded.icon_checked_at,
+           wh_kind = COALESCE(excluded.wh_kind, wh_kind),
+           wh_checked_at = excluded.wh_checked_at,
            name = COALESCE(name, excluded.name),
            quality = COALESCE(quality, excluded.quality)`,
       )
-      .run({ itemId, name, quality, icon, ts });
+      .run({ itemId, ...meta, ts });
+  }
+
+  setIcon(itemId: number, icon: string | null, quality: number | null, name: string | null, ts: number): void {
+    this.setItemMeta(itemId, { icon, quality, name, kind: null }, ts);
+  }
+
+  /** Name, Klasse und Tooltip-Kategorie pro Item, Grundlage für die Kategorie */
+  itemFacts(itemIds: number[]): Map<number, { name: string | null; classId: number | null; whKind: string | null }> {
+    const out = new Map<number, { name: string | null; classId: number | null; whKind: string | null }>();
+    const stmt = this.db.query(`SELECT name, class_id AS classId, wh_kind AS whKind FROM items WHERE item_id = $itemId`);
+    for (const itemId of itemIds) {
+      const row = stmt.get({ itemId }) as { name: string | null; classId: number | null; whKind: string | null } | null;
+      if (row) out.set(itemId, row);
+    }
+    return out;
+  }
+
+  /** Was eine Abgefangene Kiste verlangt (aus dem Wowhead-Tooltip), ersetzt alte Einträge */
+  setCrateNeeds(sourceItemId: number, needs: Array<{ count: number; name: string }>): void {
+    this.db.transaction(() => {
+      this.db.query(`DELETE FROM faction_needs WHERE source_item_id = $sourceItemId`).run({ sourceItemId });
+      const ins = this.db.query(`INSERT OR REPLACE INTO faction_needs (source_item_id, need_name, count) VALUES ($sourceItemId, $name, $count)`);
+      for (const n of needs) ins.run({ sourceItemId, name: n.name, count: n.count });
+    })();
+  }
+
+  /** Abgefangene Kisten, deren Inhalt noch unbekannt ist */
+  cratesWithoutNeeds(): number[] {
+    return (
+      this.db
+        .query(`SELECT item_id AS id FROM items WHERE name LIKE 'Abgefangene Kiste: %' AND item_id NOT IN (SELECT source_item_id FROM faction_needs)`)
+        .all() as Array<{ id: number }>
+    ).map((r) => r.id);
+  }
+
+  /**
+   * Wer bei der Handwerks-Fraktion welches Item verlangt: Item-ID → Namen der Verfügungen
+   * und Kisten. Verfügungen verlangen das Item aus ihrem Namen ("Handwerksverfügung: X"),
+   * Kisten die Handwerkswaren aus ihrem Tooltip.
+   */
+  factionNeeds(): Map<number, string[]> {
+    const byName = new Map<string, number>();
+    for (const r of this.db.query(`SELECT item_id AS id, name FROM items WHERE name IS NOT NULL`).all() as Array<{ id: number; name: string }>) {
+      if (!byName.has(r.name)) byName.set(r.name, r.id);
+    }
+    const out = new Map<number, string[]>();
+    const add = (need: string, source: string) => {
+      const id = byName.get(need);
+      if (id === undefined) return;
+      const list = out.get(id) ?? [];
+      if (!list.includes(source)) list.push(source);
+      out.set(id, list);
+    };
+    for (const name of byName.keys()) if (name.startsWith("Handwerksverfügung: ")) add(name.slice("Handwerksverfügung: ".length), name);
+    for (const r of this.db
+      .query(`SELECT n.need_name AS need, i.name AS source FROM faction_needs n JOIN items i ON i.item_id = n.source_item_id`)
+      .all() as Array<{ need: string; source: string }>) {
+      add(r.need, r.source);
+    }
+    return out;
   }
 
   itemNames(itemIds: number[]): Map<number, string> {

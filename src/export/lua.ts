@@ -59,6 +59,8 @@ export function toAddonLua(predictions: Prediction[], meta: { realm: string; gen
         luaField("sellFrom", p.sellFrom),
         luaField("sellTo", p.sellTo),
         luaField("src", p.source),
+        luaField("cat", p.category ?? null),
+        luaField("uses", p.uses?.length ? p.uses.slice(0, 3).join(" · ") : null),
         luaField("why", why(p)),
       ].filter((f): f is string => f !== null);
       lines.push(`      { ${fields.join(", ")} },`);

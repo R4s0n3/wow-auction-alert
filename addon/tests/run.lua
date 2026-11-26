@@ -73,6 +73,8 @@ for _, api in ipairs({ "legacy", "modern" }) do
     eq(WAHP_DB.itemInfo[13466].n, "Pestblüte")
     eq(WAHP_DB.itemInfo[13466].ql, 1)
     eq(WAHP_DB.itemInfo[13466].c, "Handwerkswaren/Kräuter")
+    eq(WAHP_DB.itemInfo[13466].cls, 7, "Itemklasse")
+    eq(WAHP_DB.itemInfo[13466].sub, 9, "Unterklasse")
     eq(WAHP_DB.itemInfo[2589], nil, "nur Gebot")
   end)
 end
@@ -115,7 +117,7 @@ local PRED = {
   action = "buy", name = "Pestblüte", event = "Raid-Welle 1", eventDate = "2026-12-09",
   impact = 0.48, confidence = 0.51, netUpside = 0.41, current = 4250, peak = 63000,
   buyUntil = "2026-12-05", sellFrom = "2026-12-08", sellTo = "2026-12-19",
-  why = "Raid-Welle 1 → Elixier des Mungos → Pestblüte: Gilden stocken ein",
+  why = "Raid-Welle 1 → Elixier des Mungos → Pestblüte: Gilden stocken ein", cat = "trade",
 }
 
 test("Tooltip zeigt Empfehlung, Preise und Begründung erst mit Shift", function()
@@ -173,11 +175,12 @@ end)
 
 local LOTUS = {
   action = "sell", src = "ai", name = "Schwarzer Lotus", event = "Mehr Spieler auf 60", impact = -0.3,
-  confidence = 0.7, netUpside = -0.33, current = 950000, peak = 665000, sellTo = "2026-12-05", why = "Mehr Lotus-Farmer.",
+  confidence = 0.7, netUpside = -0.33, current = 950000, peak = 665000, sellTo = "2026-12-05", why = "Mehr Lotus-Farmer.", cat = "trade",
 }
 local CRATE = {
   action = "sell", src = "ai", name = "Abgefangene Kiste", event = "Writs brechen ein", impact = -0.7,
-  confidence = 0.65, netUpside = -0.72, current = 97, peak = 29, sellTo = "2026-11-28", why = "Händlerware ohne Abnehmer.",
+  confidence = 0.65, netUpside = -0.72, current = 97, peak = 29, sellTo = "2026-11-28", why = "Händlerware ohne Abnehmer.", cat = "faction",
+  uses = "Handwerksverfügung: Kiste",
 }
 local function withData()
   WAHP_DATA = { realm = "eu-alliance", generatedAt = os.time(), items = { [13466] = { PRED }, [13468] = { LOTUS }, [5] = { CRATE } } }
@@ -230,6 +233,51 @@ test("Fenster: /wahp öffnet, Verkaufen nach Gold sortiert, Suche, Taschen, Deta
   eq(ns.ui.details.link.text, "https://www.wowhead.com/forever/de/item=5")
   rows[1].scripts.OnEnter(rows[1])
   eq(GameTooltip.item, 5, "Item-Tooltip beim Drüberfahren")
+  contains(ns.ui.details.why.text, "Verlangt von: Handwerksverfügung: Kiste")
+end)
+
+test("Fenster: Kategorie-Leiste filtert, Fokus ist Standard, Wahl bleibt gespeichert", function()
+  local H, ns = fresh()
+  WAHP_DATA = { realm = "eu-alliance", generatedAt = os.time(), items = {
+    [13468] = { LOTUS }, [5] = { CRATE },
+    [7] = { { action = "sell", name = "Feuerschutztrank", cat = "consumable", impact = -0.2, confidence = 0.5, current = 9000, peak = 7000 } },
+    [8] = { { action = "sell", name = "Ohne Kategorie", impact = -0.4, confidence = 0.6, current = 5000, peak = 3000 } },
+  } }
+  SlashCmdList.WAHP("")
+  local rows = ns.ui.rows
+  eq(ns.uiState.cat, "focus")
+  eq(rows[1].itemId, 13468, "Waren")
+  eq(rows[2].itemId, 5, "Fraktion")
+  eq(rows[3]:IsShown(), false, "Verbrauch und ohne Kategorie nicht im Fokus")
+  contains(rows[2].name.text, "[Verfügung]")
+  ns.ui.catButtons.consumable:Click()
+  eq(rows[1].itemId, 7)
+  eq(rows[2]:IsShown(), false)
+  ns.ui.catButtons.recipe:Click()
+  contains(ns.ui.empty.text, "Nichts in dieser Kategorie")
+  ns.ui.catButtons.all:Click()
+  eq(rows[4]:IsShown(), true, "Alle zeigt auch die ohne Kategorie")
+  eq(WAHP_DB.settings.category, "all")
+end)
+
+test("Forever-Client: Itemklasse über C_Item, Münzen ohne alte globale Funktion", function()
+  local H, ns = fresh()
+  local instant = GetItemInfoInstant
+  GetItemInfoInstant = nil
+  C_Item = { GetItemInfoInstant = function(id) return instant(id) end }
+  local coins = GetCoinTextureString
+  GetCoinTextureString = nil
+  C_CurrencyInfo = { GetCoinTextureString = function(c) return "C" .. c end }
+  local ok, err = pcall(function()
+    H.auctions = SAMPLE
+    openAhAndScan(H, ns)
+    eq(WAHP_DB.itemInfo[13466].cls, 7, "Klasse über C_Item")
+    eq(ns.coinString(4250), "C4250")
+    WAHP_DATA = { realm = "eu", generatedAt = os.time(), items = { [13466] = { PRED } } }
+    contains(H.hoverItem(13466)[3][1], "Jetzt C4250")
+  end)
+  GetItemInfoInstant, C_Item, GetCoinTextureString, C_CurrencyInfo = instant, nil, coins, nil
+  assert(ok, err)
 end)
 
 test("Scan-Knopf: nur am AH, scannt, lädt nach Countdown neu, danach Cooldown", function()

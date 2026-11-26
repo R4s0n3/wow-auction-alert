@@ -40,7 +40,7 @@ function ns.tooltipLines(preds, opts)
     local falling = (p.impact or 0) < 0
     if p.current and p.peak and (p.action == "buy" or p.action == "hold" or (falling and p.action == "sell")) then
       lines[#lines + 1] = {
-        ("Jetzt %s, %s ~%s"):format(GetCoinTextureString(p.current), falling and "Tief" or "Peak", GetCoinTextureString(p.peak)),
+        ("Jetzt %s, %s ~%s"):format(ns.coinString(p.current), falling and "Tief" or "Peak", ns.coinString(p.peak)),
         LIGHT[1], LIGHT[2], LIGHT[3],
       }
     end

@@ -7,7 +7,7 @@ import { startServer } from "./api/server.ts";
 import { loadConfig } from "./config.ts";
 import { openDatabase } from "./db/database.ts";
 import { Repo } from "./db/repo.ts";
-import { runEngine } from "./engine/run.ts";
+import { focusAlerts, runEngine } from "./engine/run.ts";
 import { assertValidKnowledge } from "./knowledge/validate.ts";
 import { sendDiscord } from "./live/discord.ts";
 import { LiveHub } from "./live/hub.ts";
@@ -23,6 +23,9 @@ async function warmIcons(itemIds: number[]): Promise<void> {
   if (fetchingIcons || itemIds.length === 0) return;
   fetchingIcons = true;
   try {
+    // Abgefangene Kisten: Inhalt aus dem Tooltip, damit klar ist, welche Waren sie verlangen
+    const crates = repo.cratesWithoutNeeds();
+    if (crates.length > 0) await resolveIcons(repo, crates, { max: 40, force: true });
     const found = await resolveIcons(repo, itemIds, { max: 300 });
     if (found > 0) console.log(`[icons] ${found} Icons von Wowhead geholt`);
   } catch (err) {
@@ -38,10 +41,13 @@ async function tick(): Promise<void> {
     if (alerts.length > 0) {
       hub.broadcast(alerts);
       if (config.discordWebhookUrl) {
-        // Die Icons der Items, die gleich in Discord landen, vorher holen (höchstens ~20 s)
+        // Icons und Kategorien der Items vorher holen (höchstens ~20 s), dann nur den Fokus schicken
         const ids = alerts.map((a) => a.itemId);
         await Promise.race([resolveIcons(repo, ids, { max: 60, concurrency: 6 }), Bun.sleep(20_000)]).catch(() => {});
-        await sendDiscord(config.discordWebhookUrl, alerts, fetch, undefined, { icons: iconsFor(repo, ids), publicUrl: config.publicUrl });
+        const focus = focusAlerts(repo, alerts);
+        if (focus.length > 0) {
+          await sendDiscord(config.discordWebhookUrl, focus, fetch, undefined, { icons: iconsFor(repo, ids), publicUrl: config.publicUrl });
+        }
       }
     }
     console.log(`[engine] ${predictions} Prognosen, ${alerts.length} neue Alerts`);

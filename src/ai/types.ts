@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import type { CategoryKey } from "../categories.ts";
 
 export type Direction = "up" | "down" | "flat";
 
@@ -60,6 +61,10 @@ export interface MarketItem {
   /** Median der 7 Tage davor, Kupfer */
   priceWeekBefore: number | null;
   quantity: number;
+  /** Kategorie (siehe categories.ts), gesetzt vor der Auswahl */
+  kind?: CategoryKey;
+  /** Verfügungen und Kisten der Handwerks-Fraktion, die das Item verlangen */
+  uses?: string[];
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
